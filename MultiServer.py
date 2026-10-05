@@ -124,6 +124,14 @@ class BounceTarget(typing.NamedTuple):
 
 
 
+# AF Charity: DeathLink darf nur vom Server (/deathlink) kommen, nie von Spieler-Clients.
+AF_DEATHLINK_SOURCE = "AF Charity"
+
+
+def af_has_deathlink_tag(tags: typing.Iterable[typing.Any]) -> bool:
+    return any(isinstance(tag, str) and tag.lower() == "deathlink" for tag in tags)
+
+
 def remove_from_list(container, value):
     try:
         container.remove(value)
@@ -2236,6 +2244,11 @@ async def process_client_cmd(ctx: Context, client: Client, args: dict):
                         "original_cmd": cmd}])
                     return
 
+            # AF Charity: DeathLinks von Spielern werden verworfen, nur /deathlink darf töten
+            if "tags" in args and af_has_deathlink_tag(args["tags"]):
+                logging.info(f"AF: dropped DeathLink bounce from {ctx.get_aliased_name(client.team, client.slot)}")
+                return
+
             # We now know that if a key is present, it is not None, so this should be the best way to get "set or None"
             teams = set(args["teams"]) if "teams" in args else {client.team}  # Team default is only same team
             games = set(args["games"]) if "games" in args else None
@@ -2478,6 +2491,31 @@ class ServerCommandProcessor(CommonCommandProcessor):
 
         self.output(f"Could not find player {player_name} to forbid the !release command for.")
         return False
+
+    def _cmd_deathlink(self, player_name: str, *cause: str) -> bool:
+        """AF Charity: Kill exactly one player via DeathLink (only if their client has DeathLink enabled).
+        Usage: /deathlink <player> [cause]"""
+        resolved = self.resolve_player(player_name)
+        if not resolved:
+            self.output(f"Unknown or ambiguous player: {player_name}")
+            return False
+        team, slot, name = resolved
+        targets = [c for c in self.ctx.endpoints
+                   if c.auth and c.team == team and c.slot == slot and af_has_deathlink_tag(c.tags)]
+        if not targets:
+            self.output(f"{name} has no connected client with DeathLink enabled")
+            return False
+
+        cause_text = " ".join(cause) or f"{name} wurde von {AF_DEATHLINK_SOURCE} gekillt"
+        msg = self.ctx.dumper([{
+            "cmd": "Bounced",
+            "tags": ["DeathLink"],
+            "data": {"time": time.time(), "source": AF_DEATHLINK_SOURCE, "cause": cause_text},
+        }])
+        for target in targets:
+            async_start(self.ctx.send_encoded_msgs(target, msg))
+        self.ctx.broadcast_text_all(f"DeathLink: {self.ctx.get_aliased_name(team, slot)} – {cause_text}")
+        return True
 
     def _cmd_send_multiple(self, amount: typing.Union[int, str], player_name: str, *item_name: str) -> bool:
         """Sends multiples of an item to the specified player"""
