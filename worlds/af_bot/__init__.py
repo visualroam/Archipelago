@@ -20,8 +20,10 @@ class AFBotWorld(World):
     hidden = True  # nicht in den Spiel-Listen der Website anzeigen
     topology_present = False
 
-    item_name_to_id = {}
-    location_name_to_id = {}
+    # Je ein Dummy-Eintrag: Der WebHost lehnt Uploads mit leeren Item-/Location-Tabellen ab
+    # ("Key 'item_name_to_id' error"). Erzeugt werden beide nie – der Slot bleibt leer.
+    item_name_to_id = {"Nothing": 7_559_000_000}
+    location_name_to_id = {"Bot Slot": 7_559_000_000}
 
     def create_regions(self) -> None:
         self.multiworld.regions.append(Region(self.origin_region_name, self.player, self.multiworld))
