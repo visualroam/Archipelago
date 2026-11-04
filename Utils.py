@@ -471,7 +471,10 @@ class RestrictedUnpickler(pickle.Unpickler):
             return getattr(self.net_utils_module, name)
         # Options and Plando are unpickled by WebHost -> Generate
         # pep 8 specifies that modules should have "all-lowercase names" (options, not Options)
-        if module.lower().endswith("options"):
+        # AF-Patch: Elden Ring (Alaric) definiert Options in core.py / features/*.py statt options.py.
+        # Nur dieses World-Paket, und weiterhin nur echte Option-Klassen (issubclass-Check unten).
+        if module.lower().endswith("options") or module == "worlds.eldenring.core" \
+                or module.startswith("worlds.eldenring.features."):
             if module == "Options":
                 mod = self.options_module
             else:
