@@ -1,0 +1,1 @@
+{"game": "Kingdom Hearts III", "authors": ["Codex", "Aesais"], "minimum_ap_version": "0.6.7", "world_version": "1.0.2", "release_name": "KH3 host", "description": "KH3 generation and hosting support; players need the full APWorld.", "compatible_version": 7, "version": 7, "package_variant": "host"}
