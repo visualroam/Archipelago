@@ -656,6 +656,8 @@ class GFWeb(WebWorld):
     # "For dummies" starting points: a preset dropdown on the WebHost page and ready-made yamls under
     # Players/Templates/Presets. Keys and values are pinned by tests/test_gf_options_presets.py.
     options_presets = OPTIONS_PRESETS
+    # AF-Patch: WebHost.py lädt nur Worlds, deren WebWorld `tutorials` hat. Ohne Docs leer lassen.
+    tutorials = []
 
 
 # After class creation on purpose (the mirror of the note above): essential_options is OUR
