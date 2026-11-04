@@ -1,0 +1,1002 @@
+"""SPEC-PARITY Phase 2 -- completion scaling + Scadutree blessing (COMPLETE).
+
+Curve is client-side (smoothstep over sphere; completion_scaling=4); the gate/floor the client
+actually reads live in sd["options"] (core._options_echo, F1 fix). This feature adds the option
+surface, the legacy top-level echoes, and -- as of I2 (2026-07-06) -- the LIVE scaling wire:
+
+  regionSphereTargetRanges = [[lo, hi, target], ...]   (er-logic/scaling.rs:150-165, SCALING_WIRE)
+
+with lo == hi == a region's 5-digit play_region bucket (runtime play_region_id / 100 -- the SAME
+bucket space areaLockFlags speaks, but NOT the same table -- geometry comes from the generated
+region_play_ids.SCALING_PLAY_IDS plus region_play_ids.SCALING_FLOOR_PLAY_IDS, while the kick's
+REGION_PLAY_IDS drops the kick-exempt buckets 11100/18000/10010 outright. Both REGION_ID_MAP.md-
+derived and matt-free; see #688 for why sharing one table left three combat buckets at vanilla
+difficulty). target = the region's position in a TOTAL topological order
+of the seed's lock chain, normalized to 0..TARGET_MAX (the client re-normalizes by the max emitted
+target, tier_for_target).
+
+THE ORDER RAMP (2026-07-15, Alaric playtest: "felt easy... spent most time in sphere 1-2"). Scaling
+used to be keyed on the raw FILL SPHERE, so every same-sphere region got the SAME target -- and the
+lock DAG is wide early, so most of the map sat at the sphere-1/2 tier. Now the spheres (the DAG's
+level structure, from mw.get_spheres()) are LINEARIZED into a total order: sphere ascending, with a
+seed-deterministic RANDOM tie-break among same-sphere regions (_order_from_spheres). Scaling ramps
+evenly over ORDER POSITION 0..N-1 -> target 0..TARGET_MAX (_targets_from_order), so two same-sphere
+regions land on different tiers, the mid/high tiers are actually populated, and the curve still
+never puts a region above its reachability: sphere-primary sort means a region's target is always
+strictly below every strictly-later-sphere region's target (asserted at gen). Same seed -> same
+order -> same scaling (the tie-break RNG is keyed on (multiworld.seed, player), NOT the shared
+world.random stream -- see _order_rng). FALLBACK when the fill spheres are uncomputable: SPINE-order
+depth (sphere_target_ranges) -- pure + deterministic, independent of num_regions_order roll order,
+and already a total order. A bucket absent from the wire (unmapped sub-areas only, now) falls
+back to the client's floor tier -- unknown = don't scale up, which is why WHICH buckets are
+absent is a difficulty decision and not a bookkeeping one (#688). The floor-pinned buckets
+(SCALING_FLOOR_PLAY_IDS: the hub 11100, the tutorial cliff 18000, the intro 10010) are the
+inverse of absence -- they are NAMED, at target 0, in every seed, so the client sweeps them and
+brings them DOWN rather than leaving them at whatever vanilla shipped. The flat map (regionSphereTargets) is emitted transitionally as {} by core.py;
+ranges are the live wire, so this feature deliberately does NOT emit the flat key (merge_slot_data
+raises on duplicate keys).
+"""
+import random
+
+from Options import Range, Choice, Removed, OptionError, NamedRange, Toggle, Visibility
+from ..registry import Feature, register
+from ..region_spine import SPINE, DLC_REGIONS
+from ..tables.data import FINALE_REGION
+from .. import contract
+from ..scaling_ladder import (AUTO_CEILING, BASE_GAME_TOP_TIER, SCALING_HP_LADDER,  # noqa: F401 (re-export)
+                              base_game_target_cap, ceiling_multiplier,
+                              floor_multiplier, ramped_target,
+                              resolve_max_difficulty_pct,
+                              tier_for_ceiling_multiplier, tier_for_floor_multiplier)
+# GEOMETRY: the SCALING tables, which are NOT the kick table (#688, bobler playtest 2026-08-15).
+# All of it is generated into eldenring/tables/region_play_ids.py from the one grouping in
+# greenfield/region_groups.py. This module read features/area_locks.REGION_PLAY_IDS -- the KICK
+# table -- until #688, so every bucket the kick was exempted from (18000 Fringefolk Hero's Grave /
+# Stranded Graveyard, 10010 the Chapel intro, 11100 the Roundtable) was also absent from
+# regionSphereTargetRanges, and an unwired bucket takes the client's FLOOR tier
+# (completion_scaling_floor is frozen at 0) -- i.e. it ships VANILLA. Measured on npc_id 4910:
+# 7,141 HP unwired vs 3,386 HP wired = 2.109x, exactly SCALING_HP_LADDER[6]/SCALING_HP_LADDER[0].
+#   SCALING_PLAY_IDS       region -> buckets that take their region's RAMP position;
+#   SCALING_FLOOR_PLAY_IDS buckets PINNED at target 0 in every seed (_floor_triples below).
+# Nothing is scaling-exempt: the two together cover the whole bucket universe, asserted at gen.
+try:
+    from ..tables.region_play_ids import SCALING_FLOOR_PLAY_IDS, SCALING_PLAY_IDS
+except Exception:  # not yet generated -> no geometry -> no wire (client leaves everything vanilla)
+    SCALING_PLAY_IDS, SCALING_FLOOR_PLAY_IDS = {}, frozenset()
+
+# Wire normalization ceiling. The client normalizes by the max emitted target (scaling.rs
+# tier_for_target), so the exact ceiling only needs enough integer resolution over er-logic's
+# 20-rung ladder (7010..7200); 10000 matches the frozen I2 spec.
+TARGET_MAX = 10000
+
+
+# ---- Intra-fold scaling delta (2026-07-22, Alaric; SPEC-intra-fold-scaling-delta-20260722.md) ----
+# A region's sphere target is broadcast FLAT to all its play_region buckets. When a region FOLDS
+# several vanilla areas of different native difficulty into one bucket-set, that flattens them --
+# worst case Greyoll's Dragonbarrow, a late-tier pocket inside the Caelid bucket, scaled down to
+# Caelid's target. This adds a HAND-AUTHORED per-bucket DELTA (target-space, 0..TARGET_MAX) applied
+# ON TOP of the region's target, CLAMPED so a bumped bucket can never reach the NEXT region's target
+# in the order (a local nudge, never a sphere-jump; preserves the "strictly below every later region"
+# invariant the order ramp asserts, and never inflates the max the client normalizes by). Playtest-
+# feel values, exactly like DLC_BLESSING_FLOORS. Scope = folded sub-areas ONLY (delta 0 == identity).
+# This is INTRA-fold variance, NOT cross-region reordering -- the 2026-06-19 "same sphere = same tier /
+# don't fix inversions" ruling is about REGION ordering and is untouched.
+_SCALING_BUCKET_DELTA = {
+    # bucket (play_region_id // 100) : delta in target space (0..TARGET_MAX)
+    64020: 2500,   # !! CONFIRM BUCKET + TUNE VALUE: Greyoll's Dragonbarrow (m60_49_40; m60_51_43 --
+                   #    the NE Caelid overworld tiles). Late-tier pocket folded into Caelid; this bumps
+                   #    it back toward its vanilla difficulty. 2500 ~= a couple tiers on the 0..10000 ramp.
+}
+
+
+def _apply_bucket_delta(triples):
+    """Add _SCALING_BUCKET_DELTA to matching buckets, clamped STRICTLY below the next distinct region
+    target (never a sphere-jump; never inflates the client-normalized max). Pure; empty delta ==
+    identity. triples = [[lo, hi, target], ...] with lo == hi == the bucket."""
+    if not _SCALING_BUCKET_DELTA:
+        return triples
+    distinct = sorted({t for _, _, t in triples})
+    out = []
+    for lo, hi, target in triples:
+        d = _SCALING_BUCKET_DELTA.get(lo, 0)  # lo == hi == play_region bucket
+        if d:
+            nxt = next((t for t in distinct if t > target), None)
+            ceil = (nxt - 1) if nxt is not None else TARGET_MAX
+            target = min(target + d, ceil)
+        out.append([lo, hi, target])
+    return out
+
+
+def _floor_triples():
+    """[[pid, pid, 0], ...] for every bucket pinned to the FLOOR of the seed's ramp.
+
+    THE RULING (Alaric, 2026-08-15, on bobler's "this npc fight was almost harder than every boss in
+    the run bc roundtable was unscaled"): the hub 11100, the tutorial-adjacent 18000 and the intro
+    10010 take the LOWEST scaling in the run -- emitted target 0 -- and not their host region's
+    order position. They are reachable turn one and revisited all game; nothing standing on them may
+    outpace the player. See region_groups.SCALING_FLOOR_PLAY_IDS for the full reasoning.
+
+    ⭐ WHY 0 AND NOT "their region's tier". 18000 rides Limgrave and 10010 rides Stormveil in
+    PLAY_REGION_GROUPS, and _order_from_spheres linearises the lock chain with a seed-deterministic
+    tie-break -- so those regions land wherever the fill puts them. Limgrave happened to sit at
+    target 0 in bobler's seed; in most seeds it does not. 11100 is not in any kept region at all, so
+    it has no position to inherit even in principle.
+
+    ⭐ THIS CANNOT BREAK EITHER RAMP INVARIANT, which is the whole reason the floor is expressible:
+      * "strictly below every later region" -- 0 is the minimum of the target space, and
+        ramped_target(0, ...) is already 0, so the emitted MINIMUM does not move;
+      * "never inflates the max the client normalizes by" (scaling.rs tier_for_target divides by the
+        max emitted target) -- appending 0s cannot raise a maximum.
+    Both are asserted rather than trusted, in test_gf_scaling_sphere.
+
+    🛑 The intra-fold delta is applied to the RAMPED triples only and never to these: a pinned
+    bucket is pinned. (No floor bucket is in _SCALING_BUCKET_DELTA today; this keeps it that way.)
+    """
+    return [[pid, pid, 0] for pid in sorted(SCALING_FLOOR_PLAY_IDS)]
+
+
+def sphere_target_ranges(kept, ramp_pct=100, finale=None):
+    """[[lo, hi, target], ...] triples for `kept` region names (pure; unit-testable without AP).
+
+    SPINE-ordered depth within the kept set, normalized so the deepest kept region == TARGET_MAX.
+    One lo == hi triple per play_region bucket of each kept region (same bucket space as
+    areaLockFlags).
+
+    `finale` (the FINALE_REGION name, or None) is APPENDED as the last position -- see
+    _finale_for_wire for why it cannot arrive through `kept`. It therefore takes TARGET_MAX and is
+    strictly the hardest thing in the seed, which is what "the region that ENDS the run" means.
+    🛑 A one-region seed used to emit target 0 for everything ("no progression depth to scale
+    over"); with the finale appended it has exactly one step of depth, and that step is the right
+    one -- the rolled region at the floor, the endgame at the ceiling.
+    """
+    ordered = [r for r in SPINE if r in set(kept)]
+    if finale is not None:
+        ordered.append(finale)
+    span = max(len(ordered) - 1, 1)
+    triples = []
+    for i, region in enumerate(ordered):
+        target = ramped_target(i, span, TARGET_MAX, ramp_pct)
+        for pid in SCALING_PLAY_IDS.get(region, []):
+            triples.append([pid, pid, target])
+    return _apply_bucket_delta(triples) + _floor_triples()
+
+
+# ---- THE FINALE IS NOT KEPT (2026-08-10, bobler playtest) ---------------------------------------
+# "ashen and roundtable seems to be untouched" -- and he was right about the capital.
+#
+# The Ashen Capital is NEVER ROLLED (gen_data.py: "LOCATIONS[FINALE_REGION] is NOT in REGIONS"), so
+# it is absent from `world._kept()` AND from SPINE (test_gf_data pins SPINE as a permutation of
+# REGIONS). Every scaling path keyed on one of those two, so BOTH dropped it:
+#   * live      -- _region_fill_spheres builds {f"{r} Lock": r for r in world._kept()}, and
+#                  "Ashen Capital Lock" is not a key, so the region never gets a sphere;
+#   * fallback  -- sphere_target_ranges filtered through SPINE.
+# Its GEOMETRY was never missing (region_play_ids.py: 'Ashen Capital': [11050, 19000]) and
+# area_locks special-cases it explicitly (core.py regionOpenFlags, area_locks lockRevealFlags), so
+# region LOCKS worked while SCALING skipped the whole endgame -- including play_region 19000, the
+# Elden Throne, where the goal fight is. Nine "region 11050/19000 is not in the sphere wire -- left
+# VANILLA (no tier, no down-state)" lines in bobler's client logs; 0 hits for those buckets in
+# `regionSphereTargetRanges` across all 7 seeds in them.
+#
+# 🛑 The client's degrade for an unwired bucket is the FLOOR tier plus an INFO line whose text says
+# the case is EXPECTED. That is a message doing an assertion's job, which is why this needed
+# _assert_wire_covers below rather than a comment.
+def _finale_for_wire(world):
+    """FINALE_REGION if this seed builds the finale and we have geometry for it, else None.
+
+    Gated on `gf_finale_active` -- the world's own answer, exactly as core.py:regionOpenFlags and
+    features/area_locks.py gate their finale special-cases. Asking again here (e.g. re-deriving
+    `base_game_in_play`) would be a second answer to one question; under `dlc_only` the base game is
+    sealed, the finale does not exist, and this correctly returns None."""
+    if not getattr(world, "gf_finale_active", False):
+        return None
+    return FINALE_REGION if SCALING_PLAY_IDS.get(FINALE_REGION) else None
+
+
+def resolved_tier_band(world):
+    """(floor_tier, ceiling_tier) exactly as the client will hold them: the option percents through
+    the same conversions core._options_echo emits and er-logic inverts."""
+    floor_t = tier_for_floor_multiplier(floor_multiplier(
+        int(world.options.minimum_enemy_difficulty.value)))
+    ceil_t = tier_for_ceiling_multiplier(ceiling_multiplier(resolved_max_difficulty(world)))
+    return floor_t, max(floor_t, ceil_t)
+
+
+def base_game_bucket_clamp(ranges, world):
+    """Hold every NON-DLC bucket at or below the base game's top rung when the blessing is NOT in
+    play everywhere. DLC rungs are eligible where the blessing applies (Alaric, 2026-09-06): in DLC
+    buckets always, in base-game buckets only on a seed with the blessing everywhere -- so on a
+    seed that keeps DLC regions with a DLC-only blessing, Enir Ilim climbs and Caelid does not.
+
+    scaling_ladder.base_game_target_cap has the arithmetic. This is the ONE place it is applied, so
+    the slot_data wire and every test mirror of it go through the same function. Pure over its
+    inputs: a new list, never a mutation of `ranges`.
+
+    ONLY UNDER `auto`. An explicit percent is the player's stated cap for the whole run, DLC rungs
+    included -- someone who typed 100 on a base-game seed asked for 7.4x Leyndell and gets it.
+
+    NORMALISATION. The client divides by the largest target it is sent. The clamp never touches a
+    DLC bucket, so the deepest DLC target is the post-clamp maximum, and the cap is computed
+    against THAT (see base_game_target_cap's 🛑). Two deep base-game regions may share the capped
+    target; that is the rule working, not the order ramp regressing -- both are "as hard as the
+    base game gets".
+    """
+    out = [list(t) for t in ranges]
+    if int(world.options.maximum_enemy_difficulty.value) != AUTO_CEILING:
+        return out
+    if blessing_everywhere(world):
+        return out
+    dlc = set(dlc_region_buckets(world._kept()))
+    dlc_max = max((t for lo, _hi, t in out if lo in dlc), default=0)
+    if not dlc_max:
+        return out                      # no DLC bucket: the ceiling gate already holds the band
+    floor_t, ceil_t = resolved_tier_band(world)
+    cap = base_game_target_cap(dlc_max, floor_t, ceil_t)
+    if cap >= dlc_max:
+        return out
+    return [[lo, hi, (t if lo in dlc else min(t, cap))] for lo, hi, t in out]
+
+
+def _assert_wire_covers(ranges, world):
+    """HARD-FAIL if any region the player can stand in has a play_region bucket the wire never
+    names. Mirrors features/area_locks.slot_data's coverage gate, and exists for the same reason it
+    does: the client's fallback for an unknown bucket is SILENT (floor tier + an INFO line), so a
+    gap here ships as "that area felt weirdly easy/impossible" and nothing else.
+
+    🛑🛑 THE OWED SET IS DERIVED INDEPENDENTLY OF THE WIRE, on purpose. The first version of this
+    gate asked _finale_for_wire for the owed regions -- the SAME function that decides what goes on
+    the wire -- so neutering that function dropped the finale from the demand and the supply at
+    once, and the gate sat silent through an exact replay of the bug it was written for. A guard
+    that cannot witness its own subject is not a guard. Read `gf_finale_active` here, the way
+    core.py and features/area_locks.py do, so the two answers can disagree and be caught."""
+    owed_regions = list(world._kept())
+    if getattr(world, "gf_finale_active", False) and SCALING_PLAY_IDS.get(FINALE_REGION):
+        owed_regions.append(FINALE_REGION)
+    wired = {lo for lo, _hi, _t in ranges}
+    missing = {}
+    for region in owed_regions:
+        gap = [p for p in SCALING_PLAY_IDS.get(region, []) if p not in wired]
+        if gap:
+            missing[region] = gap
+    # THE FLOOR-PINNED BUCKETS ARE OWED IN EVERY SEED, unconditionally -- they belong to no kept
+    # region (11100 belongs to no region at all), so the loop above can never demand them. Read the
+    # constant, not the wire, for the same reason the finale is read off `gf_finale_active`: a
+    # demand derived from the supply cannot witness the supply going missing. #688/#346.
+    floor_gap = sorted(p for p in SCALING_FLOOR_PLAY_IDS if p not in wired)
+    if floor_gap:
+        missing["<floor-pinned>"] = floor_gap
+    # ...and being NAMED is not enough: named at the wrong target is the bug this replaced.
+    at = {lo: t for lo, _hi, t in ranges}
+    mistiered = {p: at[p] for p in sorted(SCALING_FLOOR_PLAY_IDS) if at.get(p, 0) != 0}
+    if mistiered:
+        raise contract.ContractError(
+            "scaling: floor-pinned play_region bucket(s) emitted above the ramp floor "
+            + ", ".join(f"{p} -> target {t}" for p, t in mistiered.items())
+            + " -- the hub, the tutorial cliff and the intro must never outpace the player "
+              "(region_groups.SCALING_FLOOR_PLAY_IDS).")
+    if missing:
+        raise contract.ContractError(
+            "scaling: region(s) in play have play_region bucket(s) absent from "
+            "regionSphereTargetRanges, so the client would leave them VANILLA (no tier, no "
+            "down-state): "
+            + ", ".join(f"{r} -> {sorted(p)}" for r, p in sorted(missing.items())))
+
+
+def _region_fill_spheres(world):
+    """kept region -> the playthrough sphere its `<R> Lock` is obtained in (0 = start/precollected).
+    TRUE FILL SPHERE: reflects where each lock actually landed this seed, so a random-start
+    num_regions seed scales from the region you can reach, not geography. {} if uncomputable."""
+    player = world.player
+    mw = world.multiworld
+    lock_to_region = {f"{r} Lock": r for r in world._kept()}
+    sphere = {}
+    for it in mw.precollected_items[player]:            # start-open region(s) -> sphere 0
+        r = lock_to_region.get(it.name)
+        if r is not None:
+            sphere[r] = 0
+    try:
+        for i, locset in enumerate(mw.get_spheres()):   # 0-indexed fill spheres; +1 keeps start below
+            for loc in locset:
+                it = getattr(loc, "item", None)
+                if it is not None and getattr(it, "player", None) == player:
+                    r = lock_to_region.get(it.name)
+                    if r is not None and r not in sphere:
+                        sphere[r] = i + 1
+    except Exception:
+        return {}
+    if sphere:                                          # any lock not located -> treat as deepest
+        deepest = max(sphere.values())
+        for r in world._kept():
+            sphere.setdefault(r, deepest + 1)
+    return sphere
+
+
+def _order_from_spheres(region_sphere, rng):
+    """A TOTAL topological order (linearization of the lock-chain DAG) over the regions of
+    `region_sphere`. Primary key = the region's fill sphere (the DAG's level structure -- a sphere-i
+    lock can only require locks from spheres < i, so sphere-ascending IS a valid topological sort);
+    tie-break among same-sphere regions = random jitter from `rng` (seed-deterministic, see
+    _order_rng). The base iteration order is sorted() so the jitter is the ONLY tie-breaker -- dict
+    insertion order (which leaks set iteration order from mw.get_spheres()) never reaches the wire.
+    The topological property is ASSERTED, not trusted: if the order ever puts a region before a
+    strictly-earlier-sphere region, generation dies loudly rather than shipping an inverted curve."""
+    regions = sorted(region_sphere)
+    jitter = {r: rng.random() for r in regions}
+    order = sorted(regions, key=lambda r: (region_sphere[r], jitter[r]))
+    for a, b in zip(order, order[1:]):
+        if region_sphere[a] > region_sphere[b]:
+            raise AssertionError(
+                f"scaling order is not a topological sort of the lock chain: {a!r} (sphere "
+                f"{region_sphere[a]}) precedes {b!r} (sphere {region_sphere[b]})")
+    return order
+
+
+def _targets_from_order(order, ramp_pct=100):
+    """region -> target 0..TARGET_MAX: an even, strictly MONOTONIC ramp over the total order
+    (position 0 -> 0, last -> TARGET_MAX; a single region -> 0, no depth to scale over). Same-sphere
+    regions occupy different positions, so they get DIFFERENT targets -- that is the point of the
+    order ramp. Monotone along reachability by construction: the order is sphere-primary, so no
+    region's target ever exceeds a region it cannot precede."""
+    span = max(len(order) - 1, 1)
+    return {r: ramped_target(i, span, TARGET_MAX, ramp_pct) for i, r in enumerate(order)}
+
+
+def _order_rng(world):
+    """Seed-deterministic RNG for the same-sphere tie-breaks. Deliberately NOT world.random: slot_data
+    is built more than once for one seed (fill_slot_data re-entry; test_slot_data_is_deterministic),
+    and drawing from the shared stream would reshuffle the order on every call. Keyed on
+    (multiworld.seed, player) so it is stable per seed and per player, and independent of every other
+    roll in the generation -- the guarantee the old SPINE-depth comment promised, kept true."""
+    return random.Random(f"{world.multiworld.seed}:{world.player}:er-scaling-order")
+
+
+def _ranges_from_targets(region_target):
+    """[[lo, hi, target], ...] sorted by play_region id.
+
+    DETERMINISM: `region_target` inherits its dict ORDER from `_region_fill_spheres`, which walks
+    `mw.get_spheres()` -- and each sphere is a SET, whose iteration order varies between runs. The
+    VALUES are stable (every lock in sphere i gets i+1), but the insertion order is not, so emitting
+    in dict order made slot_data differ for the SAME seed run twice. Sort so the wire is a pure
+    function of the fill result. (Caught by test_gf_world::test_slot_data_is_deterministic.)"""
+    triples = []
+    for region, target in region_target.items():
+        for pid in SCALING_PLAY_IDS.get(region, []):
+            triples.append([pid, pid, target])
+    return sorted(_apply_bucket_delta(triples) + _floor_triples())
+
+
+# ---- DLC Scadutree-blessing floors (global_scadutree_blessing == 2 "scaled") --------------------
+# DLC enemies are tuned around a per-AREA Scadutree Blessing level (a DLC-only player-side damage/
+# defence multiplier), decoupled from runes/level. In this rando the fragments that raise blessing are
+# scattered multiworld checks, so you can reach a DLC region with ~0 blessing and get brutalised. Mode
+# 2 grants a blessing FLOOR keyed on which DLC region you're in (NOT the normalized sphere depth --
+# blessing expectation is ABSOLUTE per area: Bayle assumes ~14 whenever you fight him, however deep the
+# seed put Jagged Peak). Floors sit ~3-4 levels UNDER vanilla expectation so collected fragments still
+# buy visible power; the client's raise-only writer takes max(held-fragment level, floor). (fable
+# consult 2026-07-11.)
+# Region-spine v2: the DLC split means every floor is per-REGION now; values carried over where the
+# region existed before, and the regions split OUT of a coarse one start from vanilla-expectation
+# feel (~3-4 under, same rule): Ensis/Cerulean/Charo's were inside Gravesite's floor-1 blanket and
+# are tuned a little above it; Stone Coffin keeps the 10 it had as a per-bucket override of
+# Gravesite; Scaduview (Metyr, Keep environs) and Rauh Base ride their neighbours. Playtest-feel
+# values -- flagged for review in SPEC-region-spine-v2.md, like the boss scaling tiers.
+DLC_BLESSING_FLOORS = {
+    "Gravesite": 1,
+    "Ensis": 2,
+    "Cerulean": 2,
+    "Belurat": 3,
+    "Scadu Altus": 7,
+    "Shadow Keep": 10,   # includes the folded-in Scaduview Hinterland (2026-07-19); same floor it had
+    "Rauh Base": 10,
+    "Ancient Ruins": 12,
+    "Jagged Peak": 12,
+    "Abyssal": 12,
+    "Enir Ilim": 15,
+}
+# Per-play_region-bucket overrides for sub-areas whose native tuning diverges from their region
+# floor. RE-ARMED 2026-08-10 for exactly the case this note predicted ("a future shared-bucket
+# sub-area may need one"): Stone Coffin merged into Cerulean, whose floor is 2, but the Fissure is
+# a blessing-10 area and Putrescent Knight does not care which region owns the bucket. Charo's
+# needs no row -- it was already 2, the same as Cerulean.
+_DLC_BLESSING_BUCKET_OVERRIDE = {22000: 10}
+
+
+def dlc_region_buckets(kept):
+    """Sorted play_region buckets belonging to KEPT DLC regions. Pure; [] when no DLC is in play.
+
+    WHY THIS EXISTS. The client needs to know "is this bucket a DLC region?" and until now its only
+    way to ask was `blessing_floor_for_region(&cfg.dlc_blessing_floors, region).is_some()` -- i.e. it
+    inferred DLC-ness from the presence of a SCADUTREE BLESSING FLOOR. Those floors are emitted only
+    when `global_scadutree_blessing == 2`, and the shipped default has been `off` since 2026-07-18,
+    so on EVERY default seed that test answers `false` for every bucket in the game. The DLC flag in
+    the enemy-scaling log has therefore been dead since the day the default changed, and nobody
+    noticed, because a `false` there just prints a shorter line.
+
+    Harmless while it only decorates a log. NOT harmless as the input to a scaling decision -- and
+    that is exactly what the DLC enemy ladder (er-logic scaling.rs DLC_SCALING_ID_RANGE, the
+    20007xxx block) will need. So the signal is now DERIVED FROM THE REGION SET, which is what it
+    always meant, instead of borrowed from an unrelated option's side effect.
+
+    Same lo==hi bucket space as areaLockFlags / regionSphereTargetRanges (play_region_id // 100),
+    but emitted as a flat sorted list: this is a MEMBERSHIP set, and shaping it as ranges with a
+    meaningless third column would be inventing a value to fit an existing parser.
+    """
+    keptset = set(kept)
+    return sorted({pid for region in DLC_REGIONS if region in keptset
+                   for pid in SCALING_PLAY_IDS.get(region, [])})
+
+
+def blessing_floor_ranges(kept):
+    """[[lo, hi, floor], ...] Scadutree-blessing floors per DLC-region play_region bucket, for the kept
+    DLC regions (pure; unit-testable without AP). Same lo==hi bucket space as regionSphereTargetRanges /
+    areaLockFlags. Empty when no DLC region is kept. Per-bucket overrides win over the region floor."""
+    keptset = set(kept)
+    triples = []
+    for region in DLC_REGIONS:
+        if region not in keptset:
+            continue
+        base = DLC_BLESSING_FLOORS.get(region, 0)
+        for pid in SCALING_PLAY_IDS.get(region, []):
+            triples.append([pid, pid, _DLC_BLESSING_BUCKET_OVERRIDE.get(pid, base)])
+    return triples
+
+
+class EnemyScaling(Choice):
+    """Choose scaled or vanilla enemy strength.
+
+    Auto (default): scaled for ordinary runs, vanilla for bingo.
+    On: scale by region unlock order, or geographic order without region locks.
+    Off: vanilla strength; enemy difficulty limits and ramp speed have no effect.
+    """
+    display_name = "Enemy Scaling"
+    option_off = 0
+    option_on = 1
+    option_auto = 2
+    # Keep every spelling accepted by the previous Toggle, including YAML booleans.
+    alias_false = alias_none = alias_null = alias_no = alias_disabled = 0
+    alias_true = alias_yes = alias_enabled = 1
+    alias_0 = 0
+    alias_1 = 1
+    default = 2
+
+
+class MinimumEnemyDifficulty(Range):
+    """Raises your weakest enemies' strength so no region is ever trivial.
+
+    0 (default) changes nothing; raise it if the early game feels easy. 25 gives every enemy
+    at least 2.3x its base HP, 50 at least 4.1x, 100 puts every region at max. Must not
+    exceed Maximum Enemy Difficulty (auto rises to match; a lower one stops generation, even
+    with Enemy Scaling off, which otherwise ignores this). Rune rewards stay vanilla unless
+    scale_rune_rewards is on.
+    """
+    display_name = "Minimum Enemy Difficulty"
+    range_start = 0
+    range_end = 100
+    default = 0
+
+
+# ---- RENAMED 2026-07-27 -- stale yamls must FAIL, not be silently ignored ----------------------
+# Archipelago drops unknown yaml keys without a word (the hazard test_gf_shipping_yaml exists for),
+# so a straight rename would leave `completion_scaling_floor: 50` reading like a setting and doing
+# nothing. `Options.Removed` raises instead: "Option removed, please update your options file."
+# It is `Visibility.none`, so it does not appear in the wizard or on the webhost.
+#
+# `completion_scaling_floor` was a real name for months (it is in v0.1-era yamls and in the v0.2
+# template's FIXED list). `completion_scaling_ramp` existed for about an hour on main and never
+# shipped, but it is cheap to catch and expensive to debug.
+class CompletionScalingFloor(Removed):
+    """Renamed to `minimum_enemy_difficulty`."""
+
+
+class CompletionScalingRamp(Removed):
+    """Renamed to `difficulty_ramp_speed` -- and INVERTED: higher is now harder."""
+
+
+# ---------------------------------------------------------------------------------------------
+# THE ARM/DISARM SWITCH, RESOLVED IN ONE PLACE (#408).
+# ---------------------------------------------------------------------------------------------
+# `completion_scaling` ships TWICE: the legacy top-level copy (this feature's slot_data) and
+# sd["options"]["completion_scaling"], which is THE COPY THE CLIENT READS
+# (er-logic/src/scaling.rs parse_scaling_config -> options::parse_bool_option). Until 2026-08-06
+# only the top-level copy consulted the option; core._options_echo emitted a BARE LITERAL 4. So
+# `enemy_scaling: false` produced a slot_data reading `completion_scaling: 0` top-level and
+# `"completion_scaling": 4` inside `options`, the client read the 4, and the option was
+# unreachable from yaml -- confirmed live on 0.3.5 (240 enemies scaled at 1.14x on an off seed).
+#
+# One resolver, both emitters. A switch that can only be armed from one place cannot be half-gated.
+SMOOTHSTEP_CURVE_ID = 4
+
+
+def completion_scaling_id(world) -> int:
+    """The client's scaling curve id for this seed: SMOOTHSTEP_CURVE_ID when on, 0 when off.
+
+    0 is not "curve zero" -- er-logic `parse_scaling_config` returns None on a falsey value, so
+    `CONFIG` stays empty and `tick()` returns before the sweep ever runs. That is the vanilla path.
+
+    Defensive `getattr`: `_options_echo` resolves every other key that way, and an ABSENT option
+    must mean the SHIPPED DEFAULT: AUTO, which is off for bingo and on otherwise.
+    Never truthiness on the option OBJECT: an
+    option whose value is 0 is still a live object, which is how a `False` would read as `True`."""
+    opt = getattr(world.options, "enemy_scaling", None)
+    value = EnemyScaling.default if opt is None else opt.value
+    bingo = getattr(world.options, "bingo_mode", None)
+    if value == EnemyScaling.option_auto:
+        on = not bool(bingo.value if bingo is not None else False)
+    else:
+        on = bool(value)
+    return SMOOTHSTEP_CURVE_ID if on else 0
+
+
+def resolved_max_difficulty(world):
+    """`maximum_enemy_difficulty` as a PERCENT, with `auto` resolved. THE single call site.
+
+    🛑 THREE consumers compare this value and every one of them was a separate bug when they read the
+    RAW option instead: generate_early's floor/ceiling validation (a -1 sentinel is below every floor,
+    so it raised OptionError on every default seed), slot_data's client-feature handshake (-1 < 100,
+    so every default seed demanded a client that understands capping -- a compatibility break for
+    everyone, caught by test_an_uncapped_seed_demands_nothing_of_the_client), and core._options_echo's
+    emitted cap. They now all route here, so the validated value, the declared dependency and the
+    wire cannot disagree.
+    """
+    nr = getattr(world.options, "num_regions", None)
+    # total comes off the option's own bound: NumRegions.range_end == len(REGIONS), so it cannot
+    # drift from the region list the way a literal would.
+    return resolve_max_difficulty_pct(
+        int(world.options.maximum_enemy_difficulty.value),
+        int(nr.value) if nr is not None else 0,
+        int(nr.range_end) if nr is not None else 30,
+        int(world.options.minimum_enemy_difficulty.value),
+        dlc_rungs_eligible(world))
+
+
+def dlc_rungs_eligible(world) -> bool:
+    """Whether ANY bucket in this seed may use the rungs above the base game: the blessing applies
+    everywhere, or a DLC region is kept (the blessing is native there). scaling_ladder
+    .auto_ceiling_pct explains the gate; base_game_bucket_clamp decides WHICH buckets.
+
+    `_kept` is core's draw, published by core.generate_early before any feature's generate_early
+    runs; the getattr fallback is for pure-test worlds that never ran core at all."""
+    if blessing_everywhere(world):
+        return True
+    kept = world._kept() if hasattr(world, "_kept") else []
+    return bool(dlc_region_buckets(kept))
+
+
+def blessing_everywhere(world) -> bool:
+    """Whether `auto` may climb past the base-game top: the blessing applies everywhere AND the
+    fragments that pay for the DLC rungs can enter this seed's pool. scaling_ladder.auto_ceiling_pct
+    explains the gate; this is the ONE derivation of its input.
+
+    The fragment is a DLC item, so with the DLC off it is pool-excluded (core.gf_dlc_excluded) and
+    scadu_supply injects nothing whatever the scope says -- `anywhere` with nothing to apply. Read
+    the resolved DLC flag core publishes rather than the raw option, and fall back to the option
+    for the pure-test worlds that never ran core.generate_early.
+    """
+    if blessing_mode(world) not in (1, 2):
+        return False
+    dlc_on = getattr(world, "gf_dlc_on", None)
+    if dlc_on is None:
+        _dlc = getattr(world, "_dlc_on", None)
+        dlc_on = bool(_dlc()) if callable(_dlc) else bool(
+            getattr(getattr(world.options, "enable_dlc", None), "value", False))
+    return bool(dlc_on)
+
+
+class MaximumEnemyDifficulty(NamedRange):
+    """Caps how strong the toughest enemies can get.
+
+    25 = 2.3x base HP, 50 = 4.1x, 100 = 7.4x (no cap); 50+ is DLC strength. auto (default):
+    3.7x, the base game's top, unless the Scadutree Blessing applies everywhere or a DLC
+    region is drawn; then it grows with Number of Regions (4.1x at 6, 7.4x at 28) and adds
+    Scadutree Fragments. No effect on enemies with Enemy Scaling off. A cap under 100 (auto
+    too) needs a current client; older ones refuse it.
+    """
+    display_name = "Maximum Enemy Difficulty"
+    range_start = 0
+    range_end = 100
+    special_range_names = {"auto": AUTO_CEILING}
+    default = AUTO_CEILING
+
+
+class DifficultyRampSpeed(Range):
+    """How quickly enemy strength climbs from your first regions to your last.
+
+    0 (default) climbs evenly, so only your final region reaches full strength. 50 gets
+    there halfway through the regions your seed opens and stays, 75 by a quarter of the way,
+    100 almost at once. Raise it to spend more of the run at full strength. Maximum Enemy
+    Difficulty sets what full strength is. No effect if Enemy Scaling is off.
+    """
+    display_name = "Difficulty Ramp Speed"
+    range_start = 0
+    range_end = 100
+    default = 0
+
+
+def ramp_pct_from_speed(speed):
+    """Player-facing SPEED (0..100, higher = harder) -> `scaling_ladder.ramped_target`'s ramp_pct
+    (the percent of the run by which the top tier is reached; LOWER = harder).
+
+    Two representations, one conversion, in one place -- the same discipline as `floor_multiplier`,
+    and for the same reason. `ramp_pct` is the honest mechanical quantity, but as a player-facing
+    knob it points the wrong way: 25 would be harder than 100, while the neighbouring
+    `minimum_enemy_difficulty` gets harder as it RISES. Two difficulty sliders that disagree about
+    which direction is harder is a usability bug, so the option is inverted here and only here."""
+    return max(1, 100 - max(0, min(100, int(speed))))
+
+
+# ---- NO CEILING BUT THE GAME'S OWN (2026-08-06, Alaric) ----------------------------------------
+# `SCADU_BLESSING_CAP = 12` lived here and was sent as `scaduBlessingCap`. It is GONE: the only
+# ceiling is now the vanilla ladder's, level 20, which is what the client already falls back to when
+# the key is absent. A ceiling the base game does not have is a rule the player has to be told
+# about, and no seed was telling them.
+#
+# 🛑 THE 12 HAS NOT VANISHED -- IT MOVED, because one constant was doing two unrelated jobs. The
+# arithmetic that chose it was never about a ceiling: levels 13..20 cost 24 more fragments (half the
+# whole budget, SCADU_CUM[20]=50 vs SCADU_CUM[12]=26) to buy +11% attack, and in a base-game seed
+# every one of those is a forced-`useful` item displacing filler against an economy that is one seed
+# thick (gf-early-economy-floor-knife-edge). That is an argument about how many fragments to PUT IN
+# THE POOL, not about where to stop applying them. It now lives beside the code it governs, as
+# scadu_supply.SCADU_INJECTION_TARGET, and it is still 12: this change removes a ceiling, it does
+# not double anyone's filler displacement.
+#
+# So a seed GUARANTEES the fragments for level 12 and lets the region draw carry you past it if it
+# happens to. Nothing clamps the top any more.
+
+
+class ScadutreeBlessingScope(Choice):
+    """Where the Scadutree Blessing, the DLC's power bonus from Scadutree Fragments, applies.
+
+    It changes only your damage and defense, and matters only when the DLC is on (Enable DLC
+    or DLC Only). With anywhere, Maximum Enemy Difficulty auto may also raise base-game
+    enemies to DLC strength.
+    anywhere: works in every region; extra fragments added as needed (default)
+    dlc_only: the game's own rule, only inside the DLC; no fragments added
+    """
+    visibility = Visibility.all & ~Visibility.simple_ui
+    display_name = "Scadutree Blessing Scope"
+    option_dlc_only = 0
+    option_anywhere = 1
+    default = 1
+
+
+class DlcBlessingCatchup(Toggle):
+    """Lifts your Scadutree Blessing, the DLC power bonus, to a minimum inside DLC regions.
+
+    DLC enemies assume some blessing, but fragments are scattered checks, so you can arrive
+    with none. When on, you get the higher of your own level and that region's minimum, a
+    few levels below what the DLC expects. No effect if your seed has no DLC region. With
+    scadutree_blessing_scope dlc_only, older clients refuse the seed regardless.
+    """
+    visibility = Visibility.all & ~Visibility.simple_ui
+    display_name = "DLC Blessing Catch-up"
+
+
+# ---- the legacy key -----------------------------------------------------------------------------
+# `global_scadutree_blessing` asked TWO questions with one Choice: `off -> player_only` moves SCOPE,
+# `player_only -> scaled` adds the FLOOR. That is why value 2 had to be called `scaled`, a word this
+# codebase already spends on enemy scaling, and why the combination a lot of players actually want --
+# vanilla scope, but the DLC does not brutalise you for the fill's choices -- COULD NOT BE EXPRESSED.
+#
+# Kept as a live, translating option rather than an `Options.Removed` stub (the 2026-07-27 rename
+# pattern): a Removed option RAISES, and the point here is that old yamls keep working. Translation
+# happens in Scaling.generate_early; every consumer reads the two new options via blessing_mode().
+LEGACY_BLESSING_MAP = {
+    0: (0, 0),   # off         -> dlc_only,  no catchup
+    1: (1, 0),   # player_only -> anywhere,  no catchup
+    2: (1, 1),   # scaled      -> anywhere + catchup
+}
+
+
+class GlobalScadutreeBlessing(Choice):
+    """Old setting, kept so old yamls still load. Use the Scadutree Blessing options instead.
+
+    Those are scadutree_blessing_scope and dlc_blessing_catchup, which can also say vanilla
+    scope plus catch-up. Either one contradicting player_only or scaled stops generation.
+    off: does nothing, and does not mean vanilla scope
+    player_only: same as scope anywhere, catch-up off
+    scaled: same as scope anywhere, catch-up on
+    """
+    # Importable and visible in detailed tools/spoilers, never suggested in a new YAML.
+    visibility = Visibility.complex_ui | Visibility.spoiler
+    display_name = "Global Scadutree Blessing (old)"
+    wizard_deprecation = "Replaced by scadutree_blessing_scope and dlc_blessing_catchup. player_only maps to anywhere + catch-up off; scaled maps to anywhere + catch-up on. off does nothing. Contradictory old and new values reject generation."
+    option_off = 0
+    option_player_only = 1
+    option_scaled = 2
+    default = 0
+
+
+def resolve_legacy_blessing(world) -> None:
+    """Translate the deprecated `global_scadutree_blessing` into the two options that replaced it.
+
+    Called from Scaling.generate_early, BEFORE anything reads the pair, so every consumer sees one
+    resolved truth instead of each deciding for itself which key wins.
+
+    CONTRADICTION IS AN ERROR, NOT A PRECEDENCE RULE. A yaml naming both the old key and a new one
+    with different intent has no correct reading -- picking a winner means a player's stated setting
+    is silently dropped, which is the failure the 2026-07-27 renames were made loud to avoid. Name
+    both keys in the message so the fix is obvious from the traceback alone.
+
+    🛑 THE ONE CASE THIS CANNOT SEE. Archipelago does not record whether a value was typed or
+    defaulted, so an explicit `global_scadutree_blessing: off` is indistinguishable from not naming
+    it at all. A yaml with an explicit `off` next to `scadutree_blessing_scope: anywhere` therefore
+    resolves to `anywhere` rather than raising. That is the right way round -- the new key wins and
+    the deprecated one is the one being ignored -- but it is a real limit, not an oversight.
+    """
+    legacy = int(world.options.global_scadutree_blessing.value)
+    if legacy == 0:
+        return
+    want = LEGACY_BLESSING_MAP[legacy]
+    have = (int(world.options.scadutree_blessing_scope.value),
+            int(world.options.dlc_blessing_catchup.value))
+    legacy_name = world.options.global_scadutree_blessing.current_key
+    defaults = (ScadutreeBlessingScope.default, DlcBlessingCatchup.default)
+    if have != defaults and have != want:
+        raise OptionError(
+            f"global_scadutree_blessing ({legacy_name}) contradicts the options that replaced it. "
+            f"It means scadutree_blessing_scope="
+            f"{'anywhere' if want[0] else 'dlc_only'}, dlc_blessing_catchup="
+            f"{'on' if want[1] else 'off'}, but this yaml also sets scadutree_blessing_scope="
+            f"{'anywhere' if have[0] else 'dlc_only'}, dlc_blessing_catchup="
+            f"{'on' if have[1] else 'off'}. Drop global_scadutree_blessing -- it is deprecated and "
+            f"the two replacements can say everything it could, plus dlc_only + catchup, which it "
+            f"could not.")
+    world.options.scadutree_blessing_scope.value = want[0]
+    world.options.dlc_blessing_catchup.value = want[1]
+
+
+def blessing_mode(world) -> int:
+    """The WIRE value the client reads, derived from the two live options.
+
+    0 off | 1 anywhere | 2 anywhere+catchup | 3 dlc_only+catchup (NEW 2026-08-06).
+
+    🛑 THIS, not `world.options.global_scadutree_blessing.value`, is what every consumer must call --
+    including core._options_echo, which is the copy the client actually reads. A consumer that keeps
+    reading the legacy option sees 0 for every player who used the new names, and the setting
+    evaporates with slot_data reporting OK. That is #408's exact shape.
+
+    Mode 3 is the whole reason the split was worth a compat surface: vanilla scope + the floor.
+    """
+    scope = int(world.options.scadutree_blessing_scope.value)
+    catchup = int(world.options.dlc_blessing_catchup.value)
+    if scope == 0:
+        return 3 if catchup else 0
+    return 2 if catchup else 1
+
+
+class CoopDifficulty(Range):
+    """Makes enemies tougher for each Seamless Co-op partner. Solo players: leave at 0.
+
+    Each point makes every enemy one strength step tougher per partner: about 10% more HP on
+    average, plus more damage. 0 (default) is off. No effect if Enemy Scaling is off.
+    Seamless's own enemy-HP scaling stacks with the extra HP: turn it down or expect
+    spongier fights. Older clients ignore it.
+    """
+    visibility = Visibility.all & ~Visibility.simple_ui
+    display_name = "Seamless Co-op Difficulty"
+    range_start = 0
+    range_end = 9
+    default = 0
+
+
+class ScaleRuneRewards(Toggle):
+    """Makes rune drops from enemies and bosses follow their region's difficulty.
+
+    Turn it on to keep rewards in step with effort when the randomizer moves an early enemy
+    late or a late boss early; a bigger enemy still pays more. Golden Rune items never
+    change. No effect if Enemy Scaling is off, but the seed still needs an up-to-date
+    client; older ones refuse it.
+    """
+    visibility = Visibility.all & ~Visibility.simple_ui
+    display_name = "Scale Rune Rewards"
+    default = 0
+
+
+@register
+class Scaling(Feature):
+    name = "scaling"
+    OPTIONS = {
+        "enemy_scaling": EnemyScaling,
+        "minimum_enemy_difficulty": MinimumEnemyDifficulty,
+        "maximum_enemy_difficulty": MaximumEnemyDifficulty,
+        "difficulty_ramp_speed": DifficultyRampSpeed,
+        "coop_difficulty": CoopDifficulty,
+        "scale_rune_rewards": ScaleRuneRewards,
+        "scadutree_blessing_scope": ScadutreeBlessingScope,
+        "dlc_blessing_catchup": DlcBlessingCatchup,
+        # DEPRECATED alias for the two above; translated in generate_early.
+        "global_scadutree_blessing": GlobalScadutreeBlessing,
+        # Renamed 2026-07-27; these raise on a stale yaml rather than being ignored.
+        "completion_scaling_floor": CompletionScalingFloor,
+        "completion_scaling_ramp": CompletionScalingRamp,
+    }
+
+    def generate_early(self, world):
+        """Reject an inverted floor/ceiling here rather than letting it reach the client.
+
+        CONTRIBUTING's headline gate: an incompatible combination fails at options-validation time
+        with a message naming BOTH options, not as a FillError and not as a config that generates but
+        plays wrong. `tier_for_target` also resolves the contradiction defensively (the floor wins),
+        because it is a pure fn reachable from foreign slot_data -- but a player who typed these two
+        numbers deserves to be told, not silently corrected."""
+        lo = int(world.options.minimum_enemy_difficulty.value)
+        raw = int(world.options.maximum_enemy_difficulty.value)
+        # Resolved through the SAME function core._options_echo uses, so validation and the emitted
+        # cap cannot disagree. It also matters for correctness, not tidiness: comparing the raw `auto`
+        # sentinel (-1) against a floor would raise on EVERY DEFAULT SEED, since every floor exceeds
+        # -1. total_regions comes off the option's own bound (NumRegions.range_end == len(REGIONS)),
+        # which cannot drift from it.
+        # The deprecated blessing key becomes the two live ones FIRST: `auto` now reads the
+        # resolved blessing scope (blessing_everywhere), so translating after this line would
+        # resolve a legacy `player_only`/`scaled` yaml at the base-game cap and then emit the
+        # fragments for a higher one.
+        resolve_legacy_blessing(world)
+        hi = resolved_max_difficulty(world)
+        if raw != AUTO_CEILING and lo > hi:
+            raise OptionError(
+                f"minimum_enemy_difficulty ({lo}) is above maximum_enemy_difficulty ({hi}) -- the "
+                f"weakest enemies would be stronger than the strongest. Set the minimum at or below "
+                f"the maximum (both are 0-100, higher = harder).")
+
+    def slot_data(self, world):
+        # ORDER RAMP (2026-07-15): the fill spheres (TRUE per-seed reachability, 2026-07-07) are
+        # linearized into a total topological order with seed-deterministic tie-breaks, and the
+        # target ramps over ORDER POSITION -- so same-sphere regions scale differently and the
+        # mid/high tiers are populated even though the lock DAG is wide early ("felt easy").
+        # SPINE-order depth is the fallback when the fill sphere can't be computed (no world /
+        # degenerate); it is already a total order.
+        ramp = ramp_pct_from_speed(world.options.difficulty_ramp_speed.value)
+        region_sphere = _region_fill_spheres(world)
+        # THE FINALE RIDES THE TAIL OF BOTH PATHS. It is appended rather than fed through
+        # _region_fill_spheres because it has no fill sphere to compute: its lock is minted
+        # unconditionally and its position is a DESIGN fact, not a fill result -- it is the region
+        # that ends the run (Alaric, 2026-08-10: "yeah its last region by default now"). Appending
+        # keeps _order_from_spheres's topological assertion honest (it still sees only real fill
+        # spheres) and gives the finale TARGET_MAX by construction.
+        _finale = _finale_for_wire(world)
+        if region_sphere:
+            order = _order_from_spheres(region_sphere, _order_rng(world))
+            if _finale is not None:
+                order = order + [_finale]
+            ranges = _ranges_from_targets(_targets_from_order(order, ramp))
+        else:
+            ranges = sphere_target_ranges(world._kept(), ramp, finale=_finale)
+        # Base-game buckets never climb into the DLC rungs under `auto` -- see base_game_bucket_clamp.
+        ranges = base_game_bucket_clamp(ranges, world)
+        _assert_wire_covers(ranges, world)
+        blessing = blessing_mode(world)
+        kept_regions = world._kept()
+        # VANILLA MODE. `completion_scaling` is the client's own arm/disarm switch: er-logic
+        # `parse_scaling_config` returns None on a falsey value, so `CONFIG` stays empty, `tick()`
+        # returns immediately, and the sweep never runs -- no clear, no apply, every enemy exactly as
+        # the base game shipped it. That path already existed and is already the documented degrade;
+        # nothing here is new client behaviour, and no client release is needed.
+        #
+        # The rest of the payload is emitted UNCHANGED either way, deliberately. The client
+        # short-circuits on this key before reading any of it, so withholding the ranges would buy
+        # nothing and would make an off-seed's slot_data a second shape to reason about. One switch,
+        # read in one place.
+        out = {
+            # smoothstep (client curve id; SPEC-PARITY P2), or 0 = OFF -> vanilla. Resolved through
+            # completion_scaling_id so this copy and the one core._options_echo emits into
+            # sd["options"] cannot disagree -- they did, and #408 is what that cost.
+            "completion_scaling": completion_scaling_id(world),
+            # UNIT SPACE: this legacy TOP-LEVEL copy is the raw player-facing PERCENT (0..100). The
+            # key the client actually reads is sd["options"]["completion_scaling_floor"], emitted by
+            # core._options_echo as the HP MULTIPLIER (see floor_multiplier). Two keys, same name,
+            # DIFFERENT UNITS -- named here on purpose rather than left to be discovered
+            # (CONTRIBUTING rule 3: name the space wherever two components exchange a value), and
+            # asserted in tests/test_gf_scaling_floor_units.py so the pair cannot silently converge.
+            "completion_scaling_floor": int(world.options.minimum_enemy_difficulty.value),
+            contract.REGION_SPHERE_TARGET_RANGES: ranges,
+        }
+        # NO `scaduBlessingCap`. Absent has always meant "no extra cap -> the ladder ceiling", it is
+        # pinned on both sides, and that is now the only answer any greenfield seed gives. Emitting a
+        # constant 20 instead would be a bare literal saying exactly what absence already says.
+        # WHICH BUCKETS ARE DLC -- independent of every option, because that is what the question
+        # actually depends on. Emitted whenever a DLC region is kept; absent (inert) otherwise, so a
+        # base-game seed's slot_data is unchanged. See dlc_region_buckets for why the client could
+        # not previously ask this without accidentally asking about Scadutree blessing instead.
+        # CLIENT FEATURE HANDSHAKE. Only a seed that actually CAPS declares the dependency: at 100
+        # the ceiling is the top rung, which is what tier_for_target clamped to anyway, so a default
+        # seed connects to any client. See er_logic::client_features for why the contract hash does
+        # not cover this (it folds in CONTRACT, not OPTIONS_SUBKEYS).
+        # RESOLVED, not raw: `auto` is -1, and -1 < 100, so reading the raw value here declared the
+        # dependency on EVERY default seed. `auto` on a full map resolves to 100 and demands nothing.
+        # 🛑 ONE ASSIGNMENT, MANY TAGS. This used to be a bare `= ["scaling_ceiling"]`, which was
+        # correct only while exactly one feature could ever declare a dependency. The blessing split
+        # made that two, and a second bare assignment would have silently dropped whichever ran
+        # first -- a handshake key that loses half its content is worse than no handshake.
+        _needs = []
+        # A cap modifies the scaling pass; when scaling itself is OFF there is nothing for an old
+        # client to mis-handle. Declaring in that state makes the connect-time read-back correctly
+        # report the feature dark, then incorrectly blame a missing value that is actually present
+        # (world#661).
+        if completion_scaling_id(world) != 0 and resolved_max_difficulty(world) < 100:
+            _needs.append("scaling_ceiling")
+        # MODE 3 IS THE ONLY NEW WIRE VALUE (dlc_only scope + catch-up). Modes 0/1/2 mean exactly
+        # what they meant, so only a mode-3 seed declares anything: an older client reads
+        # `global_scadutree_blessing` as a number it does not recognise, falls through
+        # `mode != 1 && mode != 2`, and writes nothing -- the player's catch-up would evaporate with
+        # "VERSION: OK", because the contract hash folds CONTRACT and not OPTIONS_SUBKEYS. This is
+        # exactly the gap requiresClientFeatures exists to close.
+        if blessing == 3:
+            _needs.append("dlc_blessing_catchup")
+        if bool(world.options.scale_rune_rewards.value):
+            _needs.append("rune_reward_scaling")
+        if _needs:
+            out[contract.REQUIRES_CLIENT_FEATURES] = _needs
+        if set(kept_regions) & DLC_REGIONS:
+            buckets = dlc_region_buckets(kept_regions)
+            if buckets:
+                out[contract.DLC_REGION_BUCKETS] = buckets
+        # mode 2 (scaled): emit the per-DLC-region blessing floor wire, but only when DLC regions are
+        # actually kept (otherwise inert -- no key, so a base-game seed is byte-identical to mode 1).
+        if blessing in (2, 3) and set(kept_regions) & DLC_REGIONS:
+            floors = blessing_floor_ranges(kept_regions)
+            if floors:
+                out[contract.DLC_SCADUTREE_FLOOR_RANGES] = floors
+
+        # ---- TELEMETRY: state the curve this seed actually emitted -----------------------------
+        # Same pattern and same reason as progression_surface's SPILLED line: a per-seed measurement
+        # in the gen log, which tools/fill_regression.py aggregates across a seed sweep. Until this
+        # existed, the ONLY scaling coverage was a couple of hand-built worlds in pytest -- so a
+        # change that quietly flattened the curve on 1-in-20 seeds had nothing looking at it.
+        #
+        # Reports the RESOLVED tiers, not the option values, because the option values are the thing
+        # a bug would leave looking correct. tier_lo/tier_hi are computed the way the CLIENT computes
+        # them (round(frac * (NUM-1)), clamped by floor and ceiling), so this line is the curve the
+        # player gets, not the curve gen intended.
+        _n = len(SCALING_HP_LADDER)
+        _floor_t = tier_for_floor_multiplier(floor_multiplier(
+            int(world.options.minimum_enemy_difficulty.value)))
+        # 🛑 RESOLVED, not raw. `auto` is -1, and ceiling_multiplier clamps to 0..100 -- so the raw
+        # sentinel became the BOTTOM rung and this line reported `ceiling 0 / tiers 0..0` on every
+        # default seed from 55bafb2 (the auto default) onward. That is the fourth consumer to make
+        # this exact mistake; 81c90b0 routed the other three through resolved_max_difficulty and
+        # missed this one because it is a log line rather than a consumer. It is not merely a log
+        # line: tools/fill_regression.py parses it (_SCALING_RE) as its ONLY scaling telemetry, so a
+        # wrong ceiling here fired the harness's "🛑 a FLAT run" alarm on every default-curve run.
+        _ceil_t = tier_for_ceiling_multiplier(ceiling_multiplier(
+            resolved_max_difficulty(world)))
+        _targets = [t for _lo, _hi, t in ranges]
+        _mx = max(_targets) if _targets else 0
+        # The client's band formula (er-logic tier_for_target): floor + round(frac * (ceiling - floor)).
+        _tiers = sorted(
+            min(_floor_t + (round(t / _mx * (_ceil_t - _floor_t)) if _mx else 0), _ceil_t)
+            for t in _targets)
+        import logging
+        logging.getLogger("Greenfield").info(
+            "[greenfield] enemy scaling: %d buckets, tiers %d..%d of %d (floor %d, ceiling %d), "
+            "%d at ceiling, median %d; ramp %d",
+            len(_targets), _tiers[0] if _tiers else 0, _tiers[-1] if _tiers else 0, _n - 1,
+            _floor_t, _ceil_t, sum(1 for t in _tiers if t == _ceil_t),
+            _tiers[len(_tiers) // 2] if _tiers else 0, ramp)
+
+        # ---- BLESSING-FLOOR WARNING (#663) ------------------------------------------------------
+        # A DLC-region seed with no blessing floor is balanced against a Scadutree level the player
+        # has no floor for, and the seed does not say so anywhere. bobler's 67703505917608922744
+        # kept Scadu Altus and Rauh Base at `global_scadutree_blessing: 0`: EIGHT boss fights, all
+        # PLAYER DOWN, two of them under 2.5s, in the DLC's OPENING field.
+        #
+        # 🛑 THE MACHINERY TO PREVENT IT ALREADY EXISTS AND WAS NOT ASKED. `blessing_floor_ranges`
+        # computes exactly the floors the DLC ladder is balanced against; it is only consulted for
+        # modes 2 and 3, and the shipped default resolves to 0. So the floors were never computed,
+        # and nothing anywhere said they had not been.
+        #
+        # WARN-ONLY, deliberately: whether the default should flip, gain an `auto` sentinel, or stay
+        # is a balance ruling and this is not the place to take it (#663 is `needs-playtest` and the
+        # floors are per-bucket values nobody has played against). What is NOT a ruling is that a
+        # seed which cannot be played as generated should say so at generation time. This line is
+        # what turns bobler's eight losses into one grep.
+        _dlc_kept = sorted(set(kept_regions) & DLC_REGIONS)
+        if _dlc_kept and blessing not in (2, 3):
+            logging.getLogger("Greenfield").warning(
+                "[greenfield] enemy scaling: %d DLC region(s) kept (%s) with NO Scadutree blessing "
+                "floor (scadutree_blessing_scope/dlc_blessing_catchup resolve to mode %d). DLC "
+                "enemies carry the DLC ladder, whose rungs assume a blessing the player has no "
+                "floor for -- e.g. speffect 20007110 is maxHpRate 14.09 against the base game's "
+                "7090 at 3.25. The fragments that would raise it are scattered multiworld checks, "
+                "so this seed can hand the player a DLC region at blessing 0. Set "
+                "dlc_blessing_catchup if that is not intended (#663)",
+                len(_dlc_kept), ", ".join(_dlc_kept), blessing)
+        return out

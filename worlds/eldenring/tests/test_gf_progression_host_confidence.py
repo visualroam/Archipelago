@@ -1,0 +1,74 @@
+"""Drift and semantic gates for generated external progression-host confidence."""
+from __future__ import annotations
+
+import csv
+import importlib.util
+import os
+import unittest
+
+try:
+    from ._util import find_repo_root, REPO_ONLY_REASON
+except ImportError:
+    from _util import find_repo_root, REPO_ONLY_REASON
+
+REPO = find_repo_root(__file__, marker="tools/build_progression_host_confidence.py")
+
+
+def load_builder():
+    path = os.path.join(REPO, "tools", "build_progression_host_confidence.py")
+    spec = importlib.util.spec_from_file_location("host_confidence_builder", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec and spec.loader
+    spec.loader.exec_module(module)
+    return module
+
+
+@unittest.skipIf(REPO is None, REPO_ONLY_REASON)
+class ProgressionHostConfidenceTests(unittest.TestCase):
+    def test_generated_classifier_is_current_and_conservative(self):
+        builder = load_builder()
+        status = builder.main(["--check"])
+        self.assertIsInstance(status, int)
+        self.assertGreaterEqual(status, 0)
+        self.assertLess(status, 1)
+
+    def test_every_check_is_classified_and_missing_evidence_is_hold(self):
+        builder = load_builder()
+        path = os.path.join(REPO, "greenfield", "evidence", "v060-current",
+                            "progression_host_confidence.tsv")
+        with open(path, encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle, delimiter="\t"))
+        self.assertEqual(4_926, len(rows))  # 4932 -> 4926, #1522 (2026-09-25): six phantom rows retired via greenfield/tombstones.tsv
+        self.assertEqual({builder.HOLD, builder.TRUSTED},
+                         {row["confidence"] for row in rows})
+        self.assertTrue(all(row["access_status"] == "unknown" for row in rows))
+        self.assertTrue(all("does not prove access" in row["limitations"] for row in rows))
+        self.assertTrue(all((int(row["external_family_count"]) >= 2) ==
+                            (row["confidence"] == builder.TRUSTED) for row in rows))
+        # Independent Redmaw/Eldenpedia, Fextralife/Redmaw, small-guide-tail, and
+        # PowerPyx/Redmaw quest-reward, Eldenpedia invasion-reward, and Ainsel-family
+        # and reviewed walkthrough boss-reward corroborations move hosts from hold to trusted; overlapping families count once.
+        self.assertEqual(1_155, sum(row["confidence"] == builder.TRUSTED for row in rows))
+        # 3786 -> 3776 on 2026-09-08 (world#1515/#1518): all ten removed rows were HOLD, so the
+        # TRUSTED count above is unchanged and the whole delta lands here.
+        # 3777 -> 3771 (2026-09-25, #1522): all six tombstoned phantoms were HOLD; TRUSTED unmoved.
+        self.assertEqual(3_771, sum(row["confidence"] == builder.HOLD for row in rows))
+
+    def test_generated_runtime_sets_partition_the_current_check_population(self):
+        builder = load_builder()
+        path = os.path.join(REPO, "greenfield", "eldenring", "tables/evidence_progression_hosts.py")
+        spec = importlib.util.spec_from_file_location("generated_host_confidence", path)
+        generated = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(generated)
+        held = generated.HOLD_PROGRESSION_HOST_APS
+        trusted = generated.TRUSTED_PROGRESSION_HOST_APS
+        current = set(builder.load_current_check_ids())
+        self.assertTrue(trusted)
+        self.assertTrue(held)
+        self.assertTrue(trusted.isdisjoint(held))
+        self.assertEqual(current, trusted | held)
+
+
+if __name__ == "__main__":
+    unittest.main()

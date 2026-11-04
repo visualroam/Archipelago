@@ -1,0 +1,378 @@
+"""Legacy-dungeon key gates -- a separate-map legacy dungeon folded into a parent region is entered
+with a KEY ITEM, but the coarse region-lock model treats its checks as reachable the moment the
+parent region's Lock is held. Each entry here adds a LOGIC access rule: the dungeon's checks need
+the key item IN ADDITION to the parent Lock, mirroring the vanilla "you can't get in without the
+key" gate, so AP fill can never strand required progression (a region Lock, a required Great Rune)
+behind a key it never proved reachable.
+
+🛑 RAYA LUCARIA IS NO LONGER ONE OF THEM (2026-08-16). The Academy Glintstone Key gate was removed;
+the Raya Lucaria Academy Lock is now the only thing standing between a player and the Academy, and
+it grants the region's full grace bundle. See the note above _LEGACY_KEYS.
+
+Data-driven table _LEGACY_KEYS: {key item name: (parent region, (flag_lo, flag_hi))}. A map-lot
+acquisition flag encodes its map (mAA -> AA......), so a flag in [flag_lo, flag_hi) that lives in the
+parent region is a check inside that dungeon. Winnability by construction: the key is marked
+PROGRESSION (core._class_for reads world.gf_legacy_keys) and at least one vanilla source of every
+listed key sits OUTSIDE its dungeon (e.g. the Academy Glintstone Key on the Liurnia overworld at
+flag 1034457100, which is not in the m14 range), so fill always has a reachable slot to place it.
+
+Multi-key gates (features/legacy_key_gates._MULTI_KEY_GATES) handle nested sub-dungeon doors -- DLC
+Lamenter's Gaol progresses from no key, to Upper, to Upper+Lower depending on the exact check.
+
+Currently gated:
+  Imbued Sword Key       ->  four Chapel of Anticipation return checks, Liurnia;
+  Carian Inverted Statue ->  inverted Study Hall, Tower Bridge and Divine Tower checks, Liurnia;
+  Gaol U+L Level Keys      ->  Lamenter's Gaol (m41_02, Charo's) -- BOTH keys, check-level, incl.
+                              the Lamenter boss reward (f520770). See _MULTI_KEY_GATES;
+  Hole-Laden Necklace     ->  both Finger Ruins bell checks, Metyr's remembrance check, and since
+                              #1513 the Ymir/Metyr QUESTLINE REWARDS (f400661/400662/330030/400664/
+                              400666 -- see the _YMIR_* blocks for the per-flag EMEVD/ESD/shop
+                              proof). Two of the reported rows, f400672 and f68580, are DELIBERATELY
+                              left ungated; _YMIR_DEFERRED says why. NB: the
+                              Cathedral surface bucket 6920 (the old Scaduview, folded into Shadow
+                              Keep 2026-07-19), but Metyr's ARENA is m25_00, whose own grace the game
+                              buckets 6900 = Scadu Altus (MSB truth, measured 2026-07-12) -- so the
+                              gated checks live in Scadu Altus.
+
+Toggle `legacy_dungeon_keys` (DefaultOnToggle). Off -> no gate; the key stays filler and default fill
+is unchanged. LOGIC-only for now (no client hard-gate / kick).
+"""
+from Options import DefaultOnToggle
+from ..registry import Feature, register
+from . import vanilla_placement as _vp
+
+try:
+    from ..tables.data import LOCATIONS
+except Exception:  # pragma: no cover
+    LOCATIONS = {}
+try:
+    from ..tables.item_ids import ITEM_CATALOG
+    from .. import item_categories as _ic
+except Exception:  # pre-regen / standalone import
+    ITEM_CATALOG = {}
+
+    class _ic:  # type: ignore[no-redef]  # no catalog -> no runes
+        GREAT_RUNES: list = []
+
+# {key item name: (region whose checks are gated, (flag_lo, flag_hi))}. flag_hi exclusive. m14
+# map-lot flags are 14000000..14999999 (Raya Lucaria Academy); the spare key on the LIURNIA
+# overworld (flag 1034457100) is outside both the range and the region, so fill can always place a
+# key there or anywhere else reachable.
+# 🛑 THE ACADEMY GLINTSTONE KEY WAS REMOVED 2026-08-16 -- bobler's playtest, Alaric's ruling:
+# "just neutralize the academy glintstone key altogether, have the minted Academy Lock be the thing
+# that grants all the graces." bobler had received the Raya Lucaria Academy Lock and been told
+# "walk in, the Academy Glintstone Key opens it (no grace warp)" -- a Lock that grants nothing you
+# can act on is a Lock that reads as broken, and the key was buying a wall the region Lock already
+# is.
+#
+# ⭐ REMOVING IT HERE IS THE WHOLE CHANGE, and that is on purpose rather than lucky.
+# `graces.WALL_ARMED["Raya Lucaria Academy"]` asks whether "Academy Glintstone Key" is in
+# `world.gf_legacy_keys`, which is published from THIS table. Drop the entry and the predicate is
+# False in every seed, `bundle_withheld` returns False, and the Lock grants the full bundle through
+# regionGraces -- exactly where gen_data's gated-child note says the warp belongs when the wall is
+# disarmed. The pairing is deliberately left in place rather than deleted: an unpaired REGION_PARENT
+# child withholds UNCONDITIONALLY (graces.bundle_withheld fails closed), so deleting the entry would
+# do the precise opposite of this ruling. It also means re-adding the key gate here re-arms the wall
+# by itself.
+_LEGACY_KEYS = {
+    "Imbued Sword Key": ("Liurnia", (0, 0)),  # Four Belfries -> Chapel; exact flags below (#1303)
+    "Carian Inverted Statue": ("Liurnia", (0, 0)),  # inverted route; exact flags below
+    "Hole-Laden Necklace": ("Scadu Altus", (0, 0)),   # Metyr arena m25_00 -> bucket 6900 (see above)
+}
+
+# ---------------------------------------------------------------------------------------------
+# THE YMIR / METYR QUESTLINE REWARDS (#1513, design note #665).
+#
+# Until #1513 every reward below sat in logic on the Scadu Altus Lock alone, so fill could put a
+# region Lock or a required Great Rune on a check the player cannot reach without first holding the
+# necklace and ringing one or both Finger Ruins bells. Each flag here is bound to the exact vanilla
+# state that awards it, read out of v1.17 EMEVD / talk ESD / ShopLineupParam. Two facts do all the
+# work:
+#
+#   * BOTH bell ObjActs are gated on the necklace and nothing else. m61_50_40 $Event(2050402600)
+#     holds `DisableObjAct(2050401600, 52407)` until `PlayerHasItem(ItemType.Goods, 2008008)`, then
+#     `ObjActEventFlag(2050403600)` sets f2050400600 and awards lot 2050400000. Rhia's
+#     $Event(2053462600) is the same shape on f2053460600. So the necklace is necessary for any
+#     state downstream of a bell -- and NO gesture appears in either predicate (see the note on
+#     _YMIR_DEFERRED).
+#   * common.emevd $Event(9440) is exactly `WaitFor(EventFlag(2053460600) && EventFlag(2050400600))`
+#     -- BOTH bells. Anything gated on 9440, or on a state 9440 gates, needs both bell regions.
+#
+# ONE BELL (either) -- Ymir's talk ESD t420006100 dispatches on the two bell flags in x37:
+#   both -> x39, either -> x40, neither -> x41. x40 is the ONE-bell branch and its only award is
+#   `AwardItemLot(106610)`, whose ItemLotParam_map getItemFlagId is 400661. So f400661 needs the
+#   necklace, and needs no particular bell -- a disjunction our region model cannot express and
+#   does not have to: the necklace conjunct alone is sound and is not an over-gate.
+_YMIR_ONE_BELL = frozenset({
+    400661,   # Ruins Map (2nd) [7773751] + its co-check sibling Beloved Stardust [7900096]
+})
+
+# BOTH BELLS -- these additionally require the Lock of whichever region holds the Dheo bell check,
+# via _EXTRA_CHECK_LOCKS below (the same conjunct Metyr's remembrance already carries).
+#   400662  x39, the BOTH-bells branch of x37, `AwardItemLot(106620)` -> getItemFlagId 400662.
+#   330030  NOT a lot at all: ShopLineupParam block 1023 (Cathedral of Manus Metyr) row 102303,
+#           `release_flag = 9440` in the committed greenfield/shop_rows.tsv. Both bells, exactly.
+#   400664  common.emevd `$InitializeEvent(0, 4857, 2051450800, 106640, 0, 400664)`; $Event(4857) is
+#           `WaitFor(EventFlag(2051450800)) -> AwardItemsIncludingClients(106640)`, i.e. Ymir DEAD.
+#           common.emevd line 8008 makes Ymir hostile only on `EventFlag(4503) && EventFlag(25000800)
+#           && !EventFlag(2051450800)` -- 25000800 is Metyr defeated, and m61_51_45 $Event(2051452600)
+#           reaches Metyr only through `WaitFor(EventFlag(9440) && EventFlag(2051450180))`. So both
+#           bells are a necessary condition. This covers all SIX ap ids on the flag (the co-check
+#           family: bell bearing, Maternal Staff, four High Priest pieces) because _gated_location_ids
+#           matches on the FLAG, not the ap id.
+#   400666  m61_50_45 `$InitializeCommonEvent(0, 90005750, 2050451701, 4350, 106650, 400666, 400666,
+#           2051450800, 0)`; $Event(90005750) will not even spawn the pickup asset until its
+#           `eventFlagId3` -- 2051450800, Ymir dead -- is ON. Same antecedent as 400664.
+_YMIR_BOTH_BELLS = frozenset({
+    400662,   # Ruins Map (3rd)                    [7773752]
+    330030,   # [Sorcery] Fleeting Microcosm       [7770550]
+    400664,   # Ymir's Bell Bearing + 5 co-checks  [7773753, 7900097-7900101]
+    400666,   # [Sorcery] Cherishing Fingers       [7773754]
+})
+
+# 🛑 DELIBERATELY NOT GATED -- the evidence does not reach, and a plausible gate is still a guess.
+#
+#   400672  Claws of Night [7773757]. m61_51_45 `$InitializeCommonEvent(0, 90005774, 2051450180,
+#           106720, 400672)`: awarded on f2051450180. Its ONLY setter in the whole v1.17 corpus is
+#           m61_51_45 $Event(2051450722), `WaitFor(EventFlag(2051459721)) -> Set(2051450180)`, and
+#           f2051459721 is SET NOWHERE in any extracted EMEVD or talk ESD -- it is only READ, twice,
+#           in t409006100 (Jolan's ESD). f2051450180 sits BESIDE 9440 in the throne predicate rather
+#           than downstream of it, so "the bells gate it" does not follow. Jolan is #1505's batch;
+#           the missing setter is recorded there and this row stays on the region Lock until it is
+#           found. Absence of a proven edge is not an invitation to invent one.
+#
+#   68580   Finger-Weaver's Cookbook [2] [7770141]. 255 reads it as needing "the whole line". First-
+#           party data refutes that: ItemLotParam_map 2051460010 is a plain corpse, and the flag has
+#           NO row in any of the four gate corpora (lot_gates, treasure_enablers/msb_gated_treasures,
+#           esd_gifts, esd_gates). greenfield/msb_flag_region.tsv files it as m61_51_46 "宝死体001"
+#           (treasure corpse 001) -- an ordinary Finger Ruins of Miyr ground pickup. No gate.
+_YMIR_DEFERRED = frozenset({400672, 68580})
+
+_LEGACY_EXTRA = {
+    # The repeatable Chapel of Anticipation route is the Four Belfries sending gate in Liurnia.
+    # v1.17 m60_34_47 event 1034472611 requires Goods 8186, persists unlock 1034470611, removes
+    # one key, and common event 90005605 targets m10_01. Game8 + Eldenpedia independently name
+    # that destination and its key requirement; see evidence/wiki-audit/leads.tsv (#1301/#1303).
+    # f510030 has two co-checks (Scion weapon + shield); the two treasure flags are the ashes.
+    "Imbued Sword Key": frozenset({510030, 10017010, 10017900}),
+    # Standard side stays open: f34117010/060 Golden Runes, f34117080 Cerulean Seed Talisman,
+    # f34117200 Carian Glintstone Staff, f34117700 Magic Downpour. The inverted side is the Mask,
+    # two rafter pickups, second Miriam reward, bridge Godskin set, and both tower-top checks (the
+    # latter share f34117500). Orientation cross-checked against the wiki.gg walkthrough and the
+    # player's Fextra capture in #653; flags are the committed m34_11 rows in LOCATIONS.
+    "Carian Inverted Statue": frozenset({
+        34117100, 34117110, 34117120,
+        34117400, 34117401, 34117402, 34117403,
+        34117500, 34117710,
+    }),
+    # Metyr's remembrance plus BOTH Finger Ruins bell rewards. Extras are looked up globally rather
+    # than only in the key's parent region because Dheo does not live in Metyr's region (#665).
+    # Since #1513 the necklace set also carries the Ymir/Metyr questline rewards: each is awarded in
+    # a vanilla state downstream of at least one bell, and both bell ObjActs are held closed until
+    # PlayerHasItem(Goods, 2008008). See the _YMIR_* blocks above for the per-flag proof.
+    "Hole-Laden Necklace": frozenset(
+        {510550, 2050407000, 2053467600} | _YMIR_ONE_BELL | _YMIR_BOTH_BELLS),
+}
+
+_METYR_REMEMBRANCE = 510550
+_DHEO_BELL_CHECK = 2050407000
+_FLAG_BY_AP = {ap_id: int(flag) for locations in LOCATIONS.values()
+               for (_name, ap_id, flag) in locations}
+_REGION_BY_FLAG = {int(flag): region for region, locations in LOCATIONS.items()
+                   for (_name, _ap, flag) in locations}
+# Additional region Locks required by an explicit check. Metyr lives in Scadu Altus (so that Lock is
+# already implied by ordinary region reachability), but her throne also needs the Dheo bell rung --
+# and Dheo is in a DIFFERENT region. DERIVE that region from the shipped table rather than typing it:
+# the Dheo tile m61_50_40 shipped as Jagged Peak until 2026-09-07 and is Shadow Keep (= Scaduview,
+# folded into the Keep 2026-07-19) since, and a typed name here would quietly demand the wrong Lock
+# after any such move. Empty when the Dheo check is absent (its region sealed) -- start_grace then
+# forces the bell flag, so no Lock conjunct is owed at all.
+#
+# #1513 widens this from Metyr's remembrance alone to every flag in _YMIR_BOTH_BELLS, which is the
+# set whose vanilla award condition is (transitively) common.emevd f9440 = both bells rung. The
+# remembrance is a member of that set by the same reasoning and stays listed explicitly so the
+# pre-#1513 behaviour is still readable here.
+_DHEO_REGION = _REGION_BY_FLAG.get(_DHEO_BELL_CHECK)
+_BOTH_BELL_FLAGS = frozenset({_METYR_REMEMBRANCE}) | _YMIR_BOTH_BELLS
+_EXTRA_CHECK_LOCKS = ({flag: ("%s Lock" % _DHEO_REGION,) for flag in sorted(_BOTH_BELL_FLAGS)}
+                      if _DHEO_REGION else {})
+
+# MULTI-KEY gates: nested dungeon doors need a per-check tier, not one blanket conjunction. For
+# Lamenter's Gaol, v1.17 EMEVD m41_02 initializes one ObjAct using ObjActParam 449008 (goods 2008005,
+# Upper Key) and two using 1449008 (goods 2008006, Lower Key). The committed map lots identify the
+# Upper and Lower key checks as f41027000/f41027320. Two independently authored walkthrough leads
+# then agree on their route order (wiki-audit/README.md): Upper is before door 1, Lower is beyond
+# door 1, and Lamenter is beyond door 2. That adjudicates the three exact checks without pretending
+# we have MSB coordinates for every other pickup. Unknown interior checks retain the conservative
+# both-keys fallback until they are individually bound.
+#
+# `requirements` overrides exact acquisition flags. `ranges` + `extra` define the conservative
+# fallback population; an empty tuple means region access alone is sufficient for that check.
+_MULTI_KEY_GATES = (
+    {"id": "lamenters_gaol", "region": "Cerulean",   # Charo's merged into Cerulean 2026-08-10
+     "keys": ("Gaol Upper Level Key", "Gaol Lower Level Key"),
+     "ranges": ((41020000, 41030000),),
+     "extra": frozenset({520770}),
+     "requirements": {
+         41027000: (),                         # Upper Key chest is before the first locked door
+         41027320: ("Gaol Upper Level Key",),  # Lower Key chest is beyond the Upper-key door
+         520770: ("Gaol Upper Level Key", "Gaol Lower Level Key"),
+     }},
+)
+_MULTI_KEYS = frozenset(k for g in _MULTI_KEY_GATES for k in g["keys"])
+
+# Gating items (region keys + Great Runes) must NEVER be placed BEHIND another gate: two gates can
+# otherwise form an unsolvable cycle (the necklace lands on a Leyndell rune-gated check while a Great
+# Rune lands on the necklace-gated Metyr check -> deadlock; FillError seen 2026-07-10). Forbid ALL of
+# them on every gated location (supersedes the old "!= own key" self-gate rule).
+# SEVEN, from the one definition in item_categories -- see its GREAT_RUNE_GOODS_IDS block.
+_GREAT_RUNES = frozenset(_ic.GREAT_RUNES)
+_GATING_ITEMS = _GREAT_RUNES | frozenset(_LEGACY_KEYS) | _MULTI_KEYS
+
+
+def _gated_location_ids(active):
+    """ap_ids of the checks gated by each active key: parent-region locations whose flag is in the
+    key's map range. {ap_id: key_name}."""
+    out = {}
+    for key in active:
+        parent, (lo, hi) = _LEGACY_KEYS[key]
+        extra = _LEGACY_EXTRA.get(key, frozenset())
+        for region, locations in LOCATIONS.items():
+            for (_name, ap_id, flag) in locations:
+                try:
+                    fl = int(flag)
+                except (TypeError, ValueError):
+                    continue
+                if (region == parent and lo <= fl < hi) or fl in extra:
+                    out[ap_id] = key
+    return out
+
+
+def _multi_gated_location_ids(gates):
+    """ap_ids gated by a MULTI-key gate -> the tuple of keys that must ALL be held. {ap_id: (k1, k2)}.
+    A location matches if its flag falls in any of the gate's map-lot ranges or its `extra` set."""
+    out = {}
+    for g in gates:
+        for (_name, ap_id, flag) in LOCATIONS.get(g["region"], ()):
+            try:
+                fl = int(flag)
+            except (TypeError, ValueError):
+                continue
+            if fl in g["extra"] or any(lo <= fl < hi for (lo, hi) in g["ranges"]):
+                keys = tuple(g.get("requirements", {}).get(fl, g["keys"]))
+                if keys:
+                    out[ap_id] = keys
+    return out
+
+
+class LegacyDungeonKeys(DefaultOnToggle):
+    """Gate legacy dungeons behind their vanilla key item in logic (e.g. the inverted Divine Tower
+    checks need the Carian Inverted Statue, and Lamenter's Gaol follows its nested key tiers).
+    Keeps fill from placing required progression behind a key it hasn't proven reachable. On by
+    default; off restores the region-Lock-only model. Raya Lucaria Academy is NOT gated -- its
+    region Lock is the only key it has."""
+    display_name = "Legacy Dungeon Key Gates"
+
+
+@register
+class LegacyKeyGates(Feature):
+    name = "legacy_key_gates"
+    OPTIONS = {"legacy_dungeon_keys": LegacyDungeonKeys}
+
+    def _active_keys(self, world):
+        """SINGLE-key gate names live this seed: toggle on, vanilla items shuffled (so the key is
+        in the pool), the key name is a real catalog item, and its parent region is kept."""
+        opt = getattr(world.options, "legacy_dungeon_keys", None)
+        if opt is None or not opt.value:
+            return []
+        shuf = getattr(world.options, "item_shuffle", None)
+        if not (shuf and shuf.value):
+            return []  # key only enters the pool when vanilla items are shuffled
+        kept = set(world._kept())
+        return [k for k, (parent, _rng) in _LEGACY_KEYS.items()
+                if k in ITEM_CATALOG and parent in kept]
+
+    def _active_multi(self, world):
+        """MULTI-key gates live this seed: toggle on, vanilla items shuffled, region kept, and every
+        one of the gate's keys is a real catalog item (all keys must be placeable/holdable)."""
+        opt = getattr(world.options, "legacy_dungeon_keys", None)
+        if opt is None or not opt.value:
+            return []
+        shuf = getattr(world.options, "item_shuffle", None)
+        if not (shuf and shuf.value):
+            return []
+        kept = set(world._kept())
+        return [g for g in _MULTI_KEY_GATES
+                if g["region"] in kept and all(k in ITEM_CATALOG for k in g["keys"])]
+
+    def generate_early(self, world) -> None:
+        # Publish EVERY active gate key (single + multi) so core._class_for upgrades them to PROGRESSION
+        # (they are GOODS => filler by default). Empty -> nothing marked progression, default fill
+        # unchanged. set_rules re-derives single vs multi (multi keys are not in _LEGACY_KEYS).
+        keys = list(self._active_keys(world))
+        for g in self._active_multi(world):
+            keys += list(g["keys"])
+        world.gf_legacy_keys = keys
+
+    def set_rules(self, world) -> None:
+        if _vp.is_on(world):
+            # SAME SELF-GATING COLLAPSE AS THE natural_progression CLAUSES, found by this mode's
+            # acceptance test: the Gaol Upper Level Key's vanilla home is a chest INSIDE the gaol
+            # it opens, so gating those checks on it strands all 14 of Charo's Hidden Grave's
+            # Lamenter's Gaol locations. Every legacy key has that shape by construction -- a
+            # dungeon key lives near its dungeon -- and the AP gate is redundant here anyway,
+            # because the real door is still locked in game.
+            return
+        active = getattr(world, "gf_legacy_keys", [])
+        single = [k for k in active if k in _LEGACY_KEYS]
+        multi = self._active_multi(world)
+        if not single and not multi:
+            return
+        player = world.player
+        gate = _gated_location_ids(single)          # {ap_id: key_name}
+        mgate = _multi_gated_location_ids(multi)     # {ap_id: (k1, k2, ...)}
+        # ENTRANCE rule (2026-07-14, gated-children fix): a key that gates a whole MAP RANGE gates
+        # region ENTRY, and core.create_regions parents such regions under region_spine.REGION_PARENT
+        # (test_gf_gated_children enforces the pairing). Requiring the key on the "To <region>" edge
+        # itself makes the wall transitive to any future child hung under it, exactly like the
+        # physical seal. Check-level keys (empty range, e.g. the Hole-Laden Necklace) gate no entry.
+        # Multi-key gates are check-level (a sub-dungeon inside a kept region) -> no entrance rule.
+        for key in single:
+            from .bingo import active as bingo_active
+            if bingo_active(world):
+                continue  # The startup grace grants already bypass the region entrance.
+            region, (lo, hi) = _LEGACY_KEYS[key]
+            if hi <= lo:
+                continue
+            try:
+                entrance = world.multiworld.get_entrance(f"To {region}", player)
+            except KeyError:
+                continue  # region sealed this seed -- nothing to gate
+            prev_ent = entrance.access_rule
+            entrance.access_rule = (lambda state, p=prev_ent, k=key:
+                                    p(state) and state.has(k, player))
+        for loc in world.multiworld.get_locations(player):
+            ap = getattr(loc, "address", None)
+            keys = ()
+            sk = gate.get(ap)
+            if sk is not None:
+                keys = (sk,)
+            mk = mgate.get(ap)
+            if mk is not None:
+                keys = keys + tuple(mk)
+            extra_locks = _EXTRA_CHECK_LOCKS.get(_FLAG_BY_AP.get(ap, -1), ())
+            # A sealed Dheo region has no Lock and no Dheo check; start_grace conditionally supplies
+            # that otherwise-impossible conjunct. Require the Lock only when the region is live.
+            # The region NAME is _DHEO_REGION, read off data.py -- see _EXTRA_CHECK_LOCKS above.
+            if _DHEO_REGION is not None and _DHEO_REGION not in set(world._kept()):
+                extra_locks = tuple(k for k in extra_locks if k != "%s Lock" % _DHEO_REGION)
+            if not keys and not extra_locks:
+                continue
+            prev = loc.access_rule
+            loc.access_rule = (lambda state, p=prev, ks=keys, ls=extra_locks:
+                               p(state) and all(state.has(k, player) for k in ks + ls))
+            prev_item = loc.item_rule
+            loc.item_rule = lambda item, pv=prev_item: pv(item) and item.name not in _GATING_ITEMS
+
+    def slot_data(self, world):
+        return {}  # LOGIC-only; no client contract key yet (in-game hard gate = follow-up)

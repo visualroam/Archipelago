@@ -1,0 +1,731 @@
+"""THE filler tail has ONE owner.
+
+Before this module, three passes each owned a slice of the same resource and had no contract with
+each other:
+
+  1. pool_builder (additive, PASS 1) -- frozen at scope=all_filler / intensity=max / cap=0, it
+     converted essentially the WHOLE junk-consumable larder into `useful` juice gear.
+  2. filler_curation.curate (in-place swap, PASS 2) -- ran AFTER, and selected candidates that are
+     junk-consumable AND not useful. pool_builder had just marked the larder useful. So curate()
+     found an empty larder and the yaml's `curated_filler: {stones: 20, ...}` recipe delivered ~3
+     items out of an entitlement of ~534.
+  3. core.post_fill stone_ramp -- measured its stone deficit against what was already placed,
+     concluded supply was adequate, and no-op'd.
+
+Each pass was locally correct. The composition put a live playtest in fill-sphere 2 holding a +0
+weapon, and NOTHING RAISED. The passes had been defending against each other by hand for months --
+`displaceable_filler` existed only so two of them couldn't drift, pool_builder force-classified its
+own output `useful` so the others wouldn't seize it back, and PoolBuilderScope's docstring shipped a
+warning that its own aggressive setting "can thin the stone/rune economy that stone_ramp draws from".
+Passes that need classification bits, shared predicates and docstring warnings to avoid eating each
+other are one mechanism wearing three coats.
+
+So: ONE pass, ONE budget, ONE arbitration point.
+
+    partition  -> every tail slot the seed has to spend (rune-fallback checks + displaceable junk),
+                  minus what the other contributors (locks, boss keys, progressive) already ate.
+    allocate   -> the recipe, applied ONCE. Economy categories (stones, somber_stones, runes) are a
+                  RESERVATION taken off the top and are never scaled down. Everything else splits the
+                  remainder by weight. `juice` is a category like any other -- it no longer has a
+                  private budget.
+    materialize-> core writes the plan into the tail slots. There is no second pass to undo it.
+
+The starvation is now UNREPRESENTABLE rather than merely fixed: a budget too small to pay the economy
+reservation RAISES at generation instead of shipping a +0-weapon seed. Nothing in this module exits a
+loop early and shrugs -- every shortfall either raises or warns by name (CONTRIBUTING: a degraded pass
+must announce itself; the old `while _deficit > 0 and _li < len(_locs)` silently running out of slots
+is exactly how the bug survived).
+
+Guarded by tests/test_gf_filler_economy_floor.py, which asserts against the COMPOSED default pipeline
+-- because a pass tested in isolation structurally cannot see this class of bug. Six
+test_gf_pool_builder_*.py files and a filler_curation suite were all green while the seed was broken.
+"""
+import logging
+from collections import Counter, defaultdict
+from typing import Dict, List, Optional
+
+from BaseClasses import ItemClassification
+from Options import OptionError
+
+from ..tables.item_ids import ITEM_CATALOG
+from ..tables.data import HUB, LOCATIONS
+from ..tables.item_ids import LOCATION_ITEM
+from .filler_curation import (CATEGORIES, JUICE, RECIPE_KEYS, curated_stack_name,
+                              displaceable_filler)
+from .pool_builder import juice_order_for_floor, INTENSITY_FLOOR, CATEGORY_OPTION
+from ..tables.item_tiers import ITEM_TIER_CATEGORY
+
+# `juice` is a first-class recipe category now. It has no private budget any more -- if you want gear
+# injection you weight it like anything else, and it competes with stones on the same tail.
+# 🛑 JUICE and the accepted-key set both moved to features/filler_curation, beside the option they
+# describe, so that CuratedFiller.valid_keys can be derived from them -- the wizard reads the option
+# class and cannot see this module (#571). Re-exported here under their existing names because this
+# is where the unknown-category error is raised and where callers already look for them.
+JUNK = "junk"          # pseudo-category: keep whatever vanilla junk the check already paid
+VALID = frozenset(RECIPE_KEYS)
+
+# The economy. These are a RESERVATION off the top and are NEVER scaled down: a seed that cannot
+# afford them is a seed whose upgrade curve is broken, and it should fail loudly at gen rather than
+# quietly ship. (This is the whole lesson of the bug this module exists to kill.)
+ECONOMY = ("stones", "somber_stones", "runes")
+
+# Juice rarity floor -- the DEFAULT. Live again as `pool_builder_intensity` (2026-07-28): it was a
+# constant only because the option was frozen, and "how good does a piece of gear have to be to count
+# as gear" is a real question a player can have an opinion about. `juice_floor(world)` below resolves
+# it per seed; this constant remains the fallback for callers with no world (the module-level
+# _JUICE_NAMES set, and anything computing a catalog outside a generation).
+JUICE_FLOOR = INTENSITY_FLOOR["max"]
+
+
+def juice_floor(world) -> int:
+    """This seed's juice rarity floor, from `pool_builder_intensity`.
+
+    normal=3 legendary only | high=2 legendary+rare | max=1 also B-tier (the shipped default).
+    A HIGHER floor is a strictly SMALLER catalog, so raising it does not get you better gear -- it
+    gets you LESS gear, and the surplus spills to junk exactly like an over-weighted category. That
+    is the whole reason it is worth exposing rather than leaving frozen: it is a real trade, not a
+    quality dial.
+    """
+    o = getattr(getattr(world, "options", None), "pool_builder_intensity", None)
+    key = getattr(o, "current_key", None)
+    return INTENSITY_FLOOR.get(key, JUICE_FLOOR)
+
+# Regular smithing stones are drawn tier-weighted, not uniformly. Two facts drive it:
+#   * the ladder: reaching +N costs `stones_per_tier` of each tier it passes through;
+#   * the run: not every run reaches +24, and a tier-8 stone is dead for the whole early game and for
+#     most runs entirely. A tier serves a shrinking slice of the playerbase the deeper it sits.
+# So each tier's weight is its ladder cost tapered linearly by depth. This taper is a DESIGN CHOICE,
+# not a derivation -- it is the one judgment constant in this module, and it is deliberately a single
+# named number rather than smeared across a sphere-coupled placement pass (coupling a player-visible
+# economy to an invisible fill artifact is precisely what made stone_ramp both wrong and unfixable).
+STONE_TIERS = 8
+SOMBER_TIERS = 9
+
+# ---- the affordability SPEC, stated in player terms ---------------------------------------------
+# These two constants are the bar the stone reservation is sized against, and they live HERE, in prod,
+# because a fix is a predicate production calls -- not a number a test asserts about behaviour it
+# cannot influence. tests/test_gf_filler_economy_floor.py imports them, so the spec and the code that
+# satisfies it can never drift apart.
+#
+# COLLECTION_RATE: fill spheres are a 100%-COLLECTION artifact -- sphere 0 of a 4-region seed is ~40%
+# of the entire seed, and nobody clears 693 checks before moving on. Assuming they do is exactly why
+# the deleted stone_ramp always concluded there was no deficit while the player stood at +0.
+COLLECTION_RATE = 0.25          # a thorough player has cleared about a quarter of what is open
+EARLY_TARGET_LEVEL = 3          # ...and should be able to afford +3. Meek on purpose.
+
+
+# Fill SCATTER headroom. `early_stone_floor` is what must be reachable EARLY; the pool floor is what
+# the seed must HOLD to deliver that. Those are not the same number, because fill scatters some of the
+# supply past sphere 1 -- and sizing the supply to exactly the early requirement means every last stone
+# has to land early or the promise breaks. It did: on a 4-region seed the pool held 24 and only 21
+# reached spheres 0-1 (CI cleared it by a hair; Alaric's box did not, 2026-07-13).
+#
+# So the supply carries headroom. This is a judgment constant like the taper -- deliberately ONE named
+# number with a stated reason, not a sphere-coupled placement pass. It does NOT need to be exact: over-
+# supplying early stones is cheap (they are filler competing with junk consumables), whereas
+# under-supplying is the +0-weapon seed this module exists to prevent. Asymmetric cost, so round up.
+EARLY_SUPPLY_HEADROOM = 1.5
+
+
+def early_stone_floor(world) -> int:
+    """How many Smithing Stone [1] must be REACHABLE EARLY for a COLLECTION_RATE player to afford
+    +EARLY_TARGET_LEVEL. Derived from the game's own ladder under the live flatten setting -- no magic
+    number. This is the requirement; `early_stone_supply` is what it costs to meet it."""
+    need = _regular_stone_need(_flatten(world))
+    return int(need[1] / COLLECTION_RATE + 0.5)
+
+
+def early_stone_supply(world) -> int:
+    """How many Smithing Stone [1] the POOL must hold so that `early_stone_floor` of them actually
+    land early, given that fill scatters some of the supply deeper. See EARLY_SUPPLY_HEADROOM."""
+    return int(early_stone_floor(world) * EARLY_SUPPLY_HEADROOM + 0.5)
+
+
+# ---- the EARLY GUARANTEE (AP local_early_items) --------------------------------------------------
+# `early_stone_floor` above is a claim about SUPPLY: the seed HOLDS enough stones. It only lands them
+# early by accident -- on a small seed spheres 0-1 are most of the world, so nearly everything is
+# early; at a large num_regions they are a thin slice and the same reservation delivers ~nothing up
+# front, silently. (That accident is exactly what the 4-region test was quietly relying on.)
+#
+# So we also DECLARE the early stones to AP: `multiworld.local_early_items`, which Fill honours by
+# placing them in locations reachable from the START state. That is a statement of INTENT -- we never
+# look at a sphere, and fill still chooses the location. (Reading spheres and second-guessing fill is
+# what made the deleted stone_ramp both wrong and unfixable.) It degrades rather than explodes: Fill
+# uses `allow_partial=True` and warns if it cannot place them all.
+#
+# THE MARGIN (Alaric, 2026-07-13): guarantee TWICE the ladder cost, not the COLLECTION_RATE-inflated
+# floor. The floor's 4x inflation exists because a stone lying somewhere in the seed might never be
+# found; a guaranteed-early stone only has to be found in the START REGION, so a 2x margin -- "you
+# need to pick up half of them" -- is the honest number. 12 regular stones, not 24.
+EARLY_GUARANTEE_MARGIN = 2
+
+# ⭐ THE SOMBER RESERVATION FLOOR (Fable ruling 2026-08-06, SPEC-ashen-capital-lock fallout).
+#
+# The economy reservation is PROPORTIONAL (`total * weight // weights`), and nothing sized it
+# against the promise this module makes. That was invisible until `num_regions: 1` could finally
+# keep ONE region: before SPEC-ashen-capital-lock the auto goal force-kept Leyndell and its parent
+# closure added Altus, so the smallest real seed was three or four regions and the proportional
+# share always happened to clear the need. On a genuine one-region seed it does not, and
+# SomberTierPresenceFloor caught it: tiers absent from the pool entirely, and the early guarantee
+# short by one copy of Somber [1..3].
+#
+# A thin REGULAR-stone economy is a pacing problem and degrades with a warning, which is right. A
+# missing somber TIER is a WALL -- a somber weapon can never pass the level below it, in that seed,
+# ever -- and this module's own doctrine is that starvation should be unrepresentable and that the
+# cost is asymmetric, so round up. 12 slots out of a 46-130 slot one-region tail is affordable, so
+# the guarantee is kept rather than degraded.
+#
+# DERIVED, not chosen: one copy of every tier (coverage) plus the extra copies the early guarantee
+# owes on the tiers it covers. Exactly the size at which the in-draw mechanisms can pay BOTH
+# promises with zero slack when vanilla covers nothing.
+SOMBER_RESERVATION_FLOOR = SOMBER_TIERS + (EARLY_GUARANTEE_MARGIN - 1) * EARLY_TARGET_LEVEL
+
+
+def _somber_stone_need(level: int) -> Dict[int, int]:
+    """{tier: stones} to take a SOMBER weapon to +level. Somber weapons cost ONE stone per level and
+    the tier IS the level (+3 needs Somber [1], [2], [3] -- one each). `flatten_regular_upgrades` is
+    regular-only, hence no flatten term.
+
+    NB the ladders are not commensurate: somber caps at +10 where regular caps at +25, so somber +3 is
+    roughly regular +7.5 in effective terms. Targeting the same EARLY_TARGET_LEVEL for both is
+    therefore GENEROUS to somber -- deliberately, because it is cheap (6 stones total at the 2x margin)
+    and a somber weapon is a unique one the player actually wants to invest in early."""
+    return {t: 1 for t in range(1, min(level, SOMBER_TIERS) + 1)}
+
+
+def early_guarantee(world) -> Dict[str, int]:
+    """{item name: count} to hand AP as `local_early_items` -- the stones that must be reachable from
+    the start. Derived from both ladders; no magic numbers, one named margin."""
+    out: Dict[str, int] = {}
+    reg = _regular_stone_need(_flatten(world))
+    out[f"Smithing Stone [1]"] = reg[1] * EARLY_GUARANTEE_MARGIN
+    for tier, n in _somber_stone_need(EARLY_TARGET_LEVEL).items():
+        out[f"Somber Smithing Stone [{tier}]"] = n * EARLY_GUARANTEE_MARGIN
+    return out
+
+
+def declare_early_items(world, pool_names: List[str]) -> Dict[str, int]:
+    """Register the early guarantee with AP. Called from core.create_items with the pool it just built.
+
+    CLAMPED TO THE POOL, and it says so when it clamps. `local_early_items` can only place items that
+    are actually IN the itempool -- AP scans the pool for matching names and silently places nothing if
+    there are none. So a recipe with no `somber_stones` weight would get a somber guarantee that reads
+    fine in the code and delivers nothing in the seed. That is the exact failure mode this module
+    exists to make impossible, so: clamp to what the pool holds, and WARN by name on any shortfall.
+    (With any recipe that reserves somber stones, `_somber_coverage_floor` stocks the somber half of
+    this guarantee up to its count, so for the shipped default this clamp is a backstop, not the
+    mechanism -- the 2026-08-04 lesson: a guarantee that can only clamp is a hope.)
+
+    Only ever ADDS to local_early_items, so it composes with anything else wanting an early item.
+    Returns what it actually declared (diagnostics / tests)."""
+    want = early_guarantee(world)
+    excl = set(getattr(world, "gf_dlc_excluded", ()))
+    want = {nm: n for nm, n in want.items() if nm in ITEM_CATALOG and nm not in excl and n > 0}
+    if not want:
+        return {}
+
+    have = defaultdict(int)
+    for nm in pool_names:
+        if nm in want:
+            have[nm] += 1
+
+    declared: Dict[str, int] = {}
+    short: List[str] = []
+    for nm, n in sorted(want.items()):
+        n_ok = min(n, have[nm])
+        if n_ok < n:
+            short.append(f"{nm}: wanted {n} early, pool holds {have[nm]}")
+        if n_ok > 0:
+            declared[nm] = n_ok
+
+    if short:
+        logging.getLogger("Greenfield").warning(
+            "[eldenring:%s] filler_budget: the early guarantee cannot be paid in full -- %s. The pool "
+            "simply does not contain these stones (a curated_filler recipe with no `stones` / "
+            "`somber_stones` weight has no upgrade economy to make early). Add the weight, or accept "
+            "that this seed's early upgrade curve is whatever vanilla happened to leave lying around.",
+            world.player, "; ".join(short))
+
+    if not declared:
+        return {}
+    early = world.multiworld.local_early_items[world.player]
+    for nm, n in declared.items():
+        early[nm] = max(early.get(nm, 0), n)
+    logging.getLogger("Greenfield").info(
+        "[eldenring:%s] filler_budget: early guarantee -> %s (reachable from the start; %dx the ladder "
+        "cost to +%d)",
+        world.player, ", ".join(f"{n}x {nm}" for nm, n in sorted(declared.items())),
+        EARLY_GUARANTEE_MARGIN, EARLY_TARGET_LEVEL)
+    return declared
+
+
+def _regular_stone_need(flatten: int) -> Dict[int, int]:
+    """{tier: stones} to reach +24. The game's ladder: 2/4/6 per level within a tier, each level capped
+    at `flatten` when flatten > 0 (mirrors the client)."""
+    need = defaultdict(int)
+    for lvl in range(1, 25):
+        tier = (lvl - 1) // 3 + 1
+        vanilla = (2, 4, 6)[(lvl - 1) % 3]
+        need[tier] += min(vanilla, flatten) if flatten > 0 else vanilla
+    return need
+
+
+def _regular_stone_weights(flatten: int) -> Dict[int, float]:
+    """{tier: draw weight} for Smithing Stone [1..8]: ladder cost, tapered by run depth."""
+    need = _regular_stone_need(flatten)
+    return {t: need[t] * (1.0 - (t - 1) / STONE_TIERS) for t in range(1, STONE_TIERS + 1)}
+
+
+def _somber_stone_weights() -> Dict[int, float]:
+    """Somber weapons cost ONE stone per level, so the ladder is flat and only the run-depth taper
+    applies: you cannot use a Somber [9] until +8, and most runs never get there."""
+    return {t: 1.0 - (t - 1) / SOMBER_TIERS for t in range(1, SOMBER_TIERS + 1)}
+
+
+def _flatten(world) -> int:
+    o = getattr(world.options, "flatten_regular_upgrades", None)
+    return int(o.value) if o is not None else 0
+
+
+# ---- the budget --------------------------------------------------------------------------------
+def budget_slots(world) -> int:
+    """Every tail slot this seed has to spend.
+
+    = rune-fallback checks (no vanilla item -> would pay Rune)
+    + displaceable junk-consumable checks (`displaceable_filler` -- the SAME predicate core's
+      extras-sort uses to rank these to the tail, so the budget and the drop order cannot drift)
+    - slots the other contributors already ate (locks, boss keys, progressive copies).
+
+    This is the number pool_builder used to compute privately as `_rune_tail` and then spend entirely
+    on itself. It is now the shared budget, and it has exactly one consumer.
+    """
+    excl = getattr(world, "gf_dlc_excluded", ())
+    n = 0
+    for rn in [HUB] + list(world._kept()):
+        for (_name, ap_id, _flag) in LOCATIONS.get(rn, []):
+            nm = LOCATION_ITEM.get(ap_id)
+            if not (nm and nm in ITEM_CATALOG):
+                n += 1                                   # rune-fallback check
+            elif not (excl and nm in excl) and displaceable_filler(world, nm):
+                n += 1                                   # displaceable junk consumable
+    reserved = int(getattr(world, "_gf_reserved_slots", 0) or 0)
+    return max(0, n - reserved)
+
+
+def recipe_of(world) -> Dict[str, int]:
+    # #618 -- vanilla_pool is the whole-mode lever and it wins over the recipe, including the recipe
+    # a player never typed (CuratedFiller has a real default, so every yaml has one). Returned BEFORE
+    # the validation and the two warnings below on purpose: `{junk: 100}` reached that way is a
+    # deliberate mode, not the "you have asked for no economy at all, did you mean that?" accident
+    # those lines exist to catch, and firing them here would tell a player who chose vanilla that
+    # vanilla was a mistake. The mode announces itself instead, once, in its own words.
+    from . import vanilla_pool as _vp
+    if _vp.is_on(world):
+        _vp.log_override_once(world)
+        return {JUNK: 100}
+    opt = getattr(world.options, "curated_filler", None)
+    raw = dict(getattr(opt, "value", None) or {})
+    for cat in raw:
+        if cat not in VALID:
+            raise OptionError(
+                f"curated_filler: unknown category {cat!r}. Valid: {', '.join(sorted(VALID))}")
+    recipe = {c: int(w) for c, w in raw.items() if int(w) > 0}
+    if not recipe:
+        # An EXPLICITLY empty recipe is a coherent request -- "leave the whole tail exactly as vanilla
+        # paid it" -- so it is honoured, not rejected. But it is now a much bigger request than it used
+        # to be: this recipe owns the WHOLE tail, so {} also means no gear injection and no upgrade
+        # economy. That is a decision, and a decision that big does not get to be silent.
+        logging.getLogger("Greenfield").warning(
+            "[eldenring:%s] curated_filler is empty: the filler tail stays exactly as vanilla paid it "
+            "-- NO gear injection (juice) and NO smithing-stone / rune economy at all. This is a much "
+            "larger choice than it was before the filler tail got a single owner. Weight `juice` and "
+            "`stones` if you did not mean it.", world.player)
+        return {JUNK: 100}
+    if JUICE not in recipe:
+        # Loud, not silent. Under the old two-budget model juice had its own private allocation and a
+        # recipe without a `juice` key still got gear; under one budget it does not. That is a real
+        # behaviour change for an existing yaml and it must announce itself.
+        logging.getLogger("Greenfield").warning(
+            f"[eldenring:{world.player}] curated_filler has no `juice` weight: the filler tail now has "
+            f"ONE budget, so this seed gets NO pool_builder gear injection. Add e.g. `juice: 60` to the "
+            f"recipe if you want rare/legendary gear in the tail.")
+    return recipe
+
+
+def allocate(world, total: int) -> Dict[str, int]:
+    """{category: count}, summing to exactly `total`.
+
+    Economy first and in full (never scaled). Everything else splits what is left, by weight, and any
+    scale-down is warned by name. Rounding residue lands in `junk`, which is free by construction (it
+    means "keep the vanilla item this check already paid").
+    """
+    recipe = recipe_of(world)
+    weights = sum(recipe.values())
+    alloc: Dict[str, int] = {c: 0 for c in recipe}
+    if total <= 0:
+        return alloc
+
+    econ = {c: (total * recipe[c]) // weights for c in ECONOMY if c in recipe}
+    # Lift the somber share to SOMBER_RESERVATION_FLOOR when the proportional split lands under it
+    # (see the constant). Only when the recipe actually reserves somber stones -- a recipe with a
+    # zero weight promised nothing and must keep promising nothing -- and never DOWNWARD: a larger
+    # proportional share is a richer seed, not a violation.
+    if (recipe.get("somber_stones", 0) > 0
+            and econ.get("somber_stones", 0) < SOMBER_RESERVATION_FLOOR):
+        _room = total - sum(n for c, n in econ.items() if c != "somber_stones")
+        _want = min(SOMBER_RESERVATION_FLOOR, max(_room, 0))
+        if _want < SOMBER_RESERVATION_FLOOR:
+            # The budget cannot hold the floor at all. Say so BY NAME -- this is the one path where
+            # a somber tier can still be missing, and a silent clamp here is the wall arriving
+            # without a word (CONTRIBUTING: a feature is armed, or it says why not).
+            logging.getLogger("Greenfield").warning(
+                "[eldenring:%s] filler_budget: the somber reservation floor is %d (one copy of "
+                "each of the %d tiers + the early guarantee's extra copies of [1..%d]) but only %d "
+                "slot(s) are left after the other economy categories. Somber tiers may be ABSENT "
+                "from this seed's pool, which is a permanent upgrade wall, not thin supply. Keep "
+                "more regions, or lower the other %s weights.",
+                world.player, SOMBER_RESERVATION_FLOOR, SOMBER_TIERS, EARLY_TARGET_LEVEL,
+                max(_room, 0), "/".join(c for c in ECONOMY if c != "somber_stones"))
+        if _want > econ["somber_stones"]:
+            econ["somber_stones"] = _want
+    econ_total = sum(econ.values())
+    if econ_total > total:
+        raise OptionError(
+            f"curated_filler: the economy reservation ({econ_total} items: "
+            f"{', '.join(f'{c}={n}' for c, n in econ.items())}) exceeds the entire filler budget "
+            f"({total} slots). This seed cannot pay for its own upgrade curve. Lower the "
+            f"{'/'.join(ECONOMY)} weights or keep more regions.")
+    alloc.update(econ)
+
+    rest = {c: w for c, w in recipe.items() if c not in econ}
+    rest_budget = total - econ_total
+    rest_weights = sum(rest.values())
+    if rest_weights > 0:
+        for c, w in rest.items():
+            alloc[c] = (rest_budget * w) // rest_weights
+    # Rounding residue -> junk (keeps the vanilla item; always satisfiable).
+    residue = total - sum(alloc.values())
+    if residue > 0:
+        alloc[JUNK] = alloc.get(JUNK, 0) + residue
+
+    # A DEGRADED PASS MUST ANNOUNCE ITSELF. The reservation is proportional, so it can always be paid
+    # in principle -- what it CANNOT always do is clear the affordability spec, because a small seed
+    # simply has a small tail. That is not an error (a 1-region seed is allowed to be lean), but it is
+    # exactly the condition that shipped a +0-weapon playtest, and it must never again pass in silence.
+    stones = alloc.get("stones", 0)
+    if stones > 0:
+        weights = _regular_stone_weights(_flatten(world))
+        tier1 = stones * weights[1] / sum(weights.values())
+        floor = early_stone_supply(world)
+        if tier1 < floor:
+            logging.getLogger("Greenfield").warning(
+                "[eldenring:%s] filler_budget: the stone reservation buys ~%.0f Smithing Stone [1] but "
+                "a player who clears %.0f%% of the early game needs %d to afford +%d. This seed's "
+                "filler tail (%d slots) is too small for the recipe's stone weight to matter. Raise "
+                "`stones` in curated_filler, or keep more regions.",
+                world.player, tier1, COLLECTION_RATE * 100, floor, EARLY_TARGET_LEVEL, total)
+    elif "stones" in recipe:
+        logging.getLogger("Greenfield").warning(
+            "[eldenring:%s] filler_budget: `stones` is weighted in the recipe but the budget (%d "
+            "slots) rounded its share to ZERO. The seed has no smithing-stone economy.",
+            world.player, total)
+    return alloc
+
+
+# ---- materialising the plan --------------------------------------------------------------------
+def _members(world, cat: str) -> List[str]:
+    excl = set(getattr(world, "gf_dlc_excluded", ()))
+    return [m for m in CATEGORIES.get(cat, ()) if m in ITEM_CATALOG and m not in excl]
+
+
+def _draw_stones(world, n: int, somber: bool) -> List[str]:
+    weights = _somber_stone_weights() if somber else _regular_stone_weights(_flatten(world))
+    label = "Somber Smithing Stone" if somber else "Smithing Stone"
+    tiers = [t for t in weights if f"{label} [{t}]" in ITEM_CATALOG]
+    if not tiers:
+        raise OptionError(f"{label} tiers missing from the item catalog -- data.py needs regenerating")
+    w = [weights[t] for t in tiers]
+    out = [f"{label} [{t}]" for t in world.random.choices(tiers, weights=w, k=n)]
+    if somber:
+        return _somber_coverage_floor(world, out, tiers, label)
+
+    # THE EARLY FLOOR IS A GUARANTEE, NOT A HOPE (2026-07-13).
+    #
+    # `random.choices` is a weighted SAMPLE, so the tier-1 count is a binomial around n * share -- it
+    # lands near the target on average and below it about half the time. `allocate()` knew the
+    # reservation might not buy the floor and merely WARNED, which is how a seed that cannot afford a
+    # +3 weapon still shipped. This module's own thesis is that the starvation should be
+    # UNREPRESENTABLE; a coin-flip is not that.
+    #
+    # So: draw by the taper as before, then TOP UP to the floor by converting the DEEPEST stones drawn.
+    # Deepest-first is the cheapest possible correction -- the taper already says a tier-8 stone is dead
+    # for the whole early game and for most runs entirely, so those are the slots we least mind
+    # spending. Everything above the floor still follows the taper untouched.
+    #
+    # This does NOT couple the economy to fill spheres (the mistake that made stone_ramp unfixable). It
+    # is a statement about the POOL: the seed HOLDS enough tier-1 stones. Where fill puts them is fill's
+    # business.
+    floor = min(early_stone_supply(world), n)
+    t1 = f"{label} [1]"
+    have = sum(1 for s in out if s == t1)
+    if have >= floor:
+        return out
+    deepest = sorted(
+        (i for i, s in enumerate(out) if s != t1),
+        key=lambda i: -_tier_of(out[i]),
+    )
+    for i in deepest[: floor - have]:
+        out[i] = t1
+    return out
+
+
+def _vanilla_somber_counts(world) -> Counter:
+    """{tier: copies} of Somber Smithing Stone this seed's KEPT vanilla checks already pay for.
+
+    COUNTS, not a presence set, because the floor below now pays two different promises: presence
+    needs to know a tier is covered AT ALL, while the early margin needs to know HOW MANY copies the
+    pool already holds (`declare_early_items` counts the vanilla copies too -- they are protected
+    pool items like any other).
+
+    This IS visible at this layer, and it is exact rather than a guess. Every somber stone matches
+    `filler_curation._ECONOMY_SUBSTR` ("Smithing Stone"), so `_is_junk_consumable` -- and therefore
+    `displaceable_filler` -- is False for all of them: core.create_items ranks them PROTECTED
+    (rank 1), never lists them among the budget slots this module plans over, and never overwrites
+    one. A tier the vanilla pool already covers is already in the seed, so it must not spend a
+    reservation slot covering itself a second time.
+
+    The walk is deliberately the SAME walk `budget_slots` does -- [HUB] + world._kept() over
+    LOCATION_ITEM, DLC exclusion applied -- because a floor sized against a pool the world does not
+    actually build is precisely the composed-pipeline bug this module exists to kill.
+
+    The one way it can over-report: core trims `extras` down to the number of slots. That trim eats
+    rank 3 (the Rune sentinel) then rank 2 (displaceable junk) first and only reaches a protected
+    item on a seed with fewer locations than protected items -- a seed with no upgrade economy to
+    speak of either way.
+    """
+    excl = set(getattr(world, "gf_dlc_excluded", ()))
+    out: Counter = Counter()
+    for rn in [HUB] + list(world._kept()):
+        for (_name, ap_id, _flag) in LOCATIONS.get(rn, []):
+            nm = LOCATION_ITEM.get(ap_id)
+            if (nm and nm.startswith("Somber Smithing Stone [")
+                    and nm in ITEM_CATALOG and nm not in excl):
+                out[_tier_of(nm)] += 1
+    return out
+
+
+def _somber_coverage_floor(world, out: List[str], tiers: List[int], label: str) -> List[str]:
+    """THE SOMBER FLOOR IS COVERAGE, NOT A COUNT (2026-08-02).
+
+    The regular ladder's failure mode is DENSITY -- +3 costs six Smithing Stone [1] -- so the floor
+    above it is a COUNT. The somber ladder's failure mode is a different thing entirely. A somber
+    weapon costs exactly ONE stone per level and the tier IS the level, so a tier is never scarce or
+    plentiful: it is present, or it is a WALL. No Somber [7] in the seed means every somber weapon
+    stops at +6, permanently, however many [1]s are lying about.
+
+    And absence is ROUTINE, because the draw is an i.i.d. weighted sample WITH REPLACEMENT: at
+    num_regions=1 the reservation is ~19 draws over a taper that gives [9] a 1/9 share, so
+    P(no [9] drawn) ~= 0.65 and P(no [3] drawn) ~= 0.04. A player reported exactly the [3] case
+    ("zero Somber Smithing Stone [3] in the game") on 2026-08-02.
+
+    Until that date `_draw_stones` RETURNED here, before the regular top-up, so NO somber tier had
+    any guarantee at all -- the module's tier-1 guarantee was regular-only and the somber ladder was
+    pure luck. It now gets the floor that matches the failure mode it actually has, paid exactly the
+    way the regular one is: by converting the DEEPEST stones already drawn. It never grows the
+    reservation, so `allocate`'s count is untouched and a seed cannot buy coverage it cannot afford.
+
+    AND THE EARLY MARGIN (2026-08-04; boblerrr's playtest: the Somber [1]/[2] sphere-0 floors "may
+    not be getting restricted" on small num_regions seeds). `early_guarantee` promises
+    EARLY_GUARANTEE_MARGIN copies of Somber [1..EARLY_TARGET_LEVEL] reachable from the start, but
+    `declare_early_items` is an AP placement HINT -- it can only declare what the pool already
+    holds, and it clamps and warns on a shortfall. A ONE-copy presence floor therefore left the
+    TWO-copy early promise a coin flip: at num_regions=1 the reservation is ~20 draws, the pool
+    held a single copy of a low tier in ~10-20% of seeds per tier (measured over 54 full
+    generations, 2026-08-04), and fill then delivered exactly the one copy it was declared --
+    sphere 0 tracked the pool seed for seed, so the RESTRICTION was never the broken half, the
+    SUPPLY was. A guarantee that clamps to supply is a hope. Supply is created here, where the
+    reservation is drawn: the low tiers' floor is the early guarantee's own count, so the hint
+    downstream has nothing left to clamp.
+    """
+    if not out:
+        return out
+    covered = _vanilla_somber_counts(world)
+    counts = Counter(_tier_of(s) for s in out)
+
+    # The floor's two promises, as one REQUIREMENT multiset over this draw. PRESENCE: one of every
+    # tier, or a somber weapon walls at the hole. THE EARLY MARGIN: `early_guarantee`'s own count of
+    # the tiers it declares. Vanilla copies on kept checks pay toward both (they are protected pool
+    # items, and `declare_early_items` counts them like any other), so the reservation only buys
+    # what the seed does not already hold. Priority when the reservation cannot afford everything:
+    # every uncovered tier's FIRST copy (ascending), then the margin copies (ascending) -- presence
+    # strictly outranks margin, because a hole is a permanent wall at that level while a thin margin
+    # only costs find-rate in the start region.
+    need = {t: (EARLY_GUARANTEE_MARGIN if t <= EARLY_TARGET_LEVEL else 1) for t in tiers}
+    first_copies = [t for t in sorted(tiers) if covered[t] == 0]
+    margin: List[int] = []
+    for t in sorted(tiers):
+        extra = need[t] - covered[t] - (1 if covered[t] == 0 else 0)
+        margin += [t] * max(0, extra)
+    units = first_copies + margin
+    kept = units[: len(out)]        # a requirement past the reservation's size is unpayable by
+    req = Counter(kept)             # construction; it is warned below, never silently dropped
+
+    # DEFICITS in priority order: a kept unit the draw did not already pay.
+    have = Counter(counts)
+    deficit: List[int] = []
+    for t in kept:
+        if have[t] > 0:
+            have[t] -= 1
+        else:
+            deficit.append(t)
+
+    # CONVERT SURPLUS, DEEPEST FIRST -- the same "cheapest correction" rule the regular floor uses,
+    # and for the same reason: the taper already says a deep stone serves the smallest slice of
+    # runs. A stone is SURPLUS exactly when its tier already meets its requirement -- which includes
+    # the last drawn copy of a vanilla-covered tier, because the vanilla copy is the one holding
+    # that wall up. (The earlier rule, "a tier never donates its last copy", protected those for no
+    # one, and at a ~14-stone reservation that starved the margin.) `req` never exceeds the
+    # reservation, so surplus always covers the deficit and the affordable part of the floor is
+    # paid IN FULL, deterministically.
+    surplus = {t: counts[t] - req[t] for t in counts}
+    donors: List[int] = []
+    for i in sorted(range(len(out)), key=lambda k: (-_tier_of(out[k]), k)):
+        t = _tier_of(out[i])
+        if surplus.get(t, 0) > 0:
+            surplus[t] -= 1
+            donors.append(i)
+    for tier, i in zip(deficit, donors):
+        out[i] = f"{label} [{tier}]"
+
+    # A DEGRADED PASS MUST ANNOUNCE ITSELF -- this module's rule, and the whole reason the old
+    # three-pass design shipped broken. Only a reservation smaller than the requirement list can
+    # leave units unpaid; the draw may still cover a trimmed unit by luck, so warn only on tiers
+    # that actually end up short.
+    n_kept = len(kept)
+    unpaid_presence = [t for t in first_copies[n_kept:] if counts[t] == 0]
+    if unpaid_presence:
+        logging.getLogger("Greenfield").warning(
+            "[eldenring:%s] filler_budget: the somber reservation (%d stones) is too small to hold "
+            "one of every tier -- %s absent, so a somber weapon in this seed cannot pass +%d. The "
+            "shallow tiers were covered first (a missing low tier walls the ladder at its base). "
+            "Raise `somber_stones` in curated_filler, or keep more regions.",
+            world.player, len(out), ", ".join(f"{label} [{t}]" for t in unpaid_presence),
+            min(unpaid_presence) - 1)
+    unpaid_margin = sorted(set(
+        t for t in margin[max(0, n_kept - len(first_copies)):]
+        if counts[t] + covered[t] < need[t]))
+    if unpaid_margin:
+        # Same rule, milder promise: the ladder itself is intact (or warned above), but the early
+        # guarantee will clamp below its margin downstream.
+        logging.getLogger("Greenfield").warning(
+            "[eldenring:%s] filler_budget: the somber reservation (%d stones) cannot also stock the "
+            "early guarantee (%dx %s [1..%d]) -- short: %s. declare_early_items will clamp to what "
+            "the pool holds. Raise `somber_stones` in curated_filler, or keep more regions.",
+            world.player, len(out), EARLY_GUARANTEE_MARGIN, label, EARLY_TARGET_LEVEL,
+            ", ".join(f"{label} [{t}]" for t in unpaid_margin))
+    return out
+
+
+def _tier_of(name: str) -> int:
+    """`Smithing Stone [7]` -> 7. Names are generated by this module, so the shape is ours to rely on."""
+    return int(name.rsplit("[", 1)[1].rstrip("]"))
+
+
+def plan(world, total: int) -> List[Optional[str]]:
+    """An ordered, shuffled list of length `total`: the item NAME for each tail slot, or None to keep
+    whatever the check already paid (the `junk` share, and the Rune sentinel where a check had no
+    vanilla item).
+
+    Every category either fills its allocation exactly or warns by name with the shortfall. No loop
+    here exits early and shrugs.
+    """
+    alloc = allocate(world, total)
+    out: List[Optional[str]] = []
+
+    for cat, n in sorted(alloc.items()):
+        if n <= 0:
+            continue
+        if cat == JUNK:
+            out += [None] * n
+        elif cat == "stones":
+            out += _draw_stones(world, n, somber=False)
+        elif cat == "somber_stones":
+            out += _draw_stones(world, n, somber=True)
+        elif cat == JUICE:
+            order = [nm for nm in juice_order_for_floor(juice_floor(world))
+                     if nm not in set(getattr(world, "gf_dlc_excluded", ()))]
+            # PER-CATEGORY juice (pool_builder_pct_weapons / _spells / ...) still works: those percents
+            # now split the JUICE allocation rather than carving a second private slice out of the
+            # tail. Same knob, same meaning ("what share of my gear injection is spells?"), but it can
+            # no longer grow the juice budget at the economy's expense -- which is the whole point of
+            # a single owner. No percents set (the default) = best-first across every category.
+            pcts = {}
+            for opt, gear_cat in CATEGORY_OPTION.items():
+                o = getattr(world.options, opt, None)
+                v = max(0, min(100, int(o.value))) if o is not None else 0
+                if v > 0:
+                    pcts[gear_cat] = v
+            if pcts:
+                picks = []
+                tot = sum(pcts.values())
+                for gear_cat, pct in sorted(pcts.items()):
+                    want = (n * pct) // tot
+                    cat_items = [nm for nm in order if ITEM_TIER_CATEGORY.get(nm) == gear_cat]
+                    if len(cat_items) < want:
+                        logging.getLogger("Greenfield").warning(
+                            "[eldenring:%s] juice category %s: catalog holds %d items at the rarity "
+                            "floor but %d were allocated; the shortfall spills to junk.",
+                            world.player, gear_cat, len(cat_items), want)
+                    picks += cat_items[:want]
+            else:
+                picks = order[:n]                 # best-first: legendary, then rare, then B-tier
+            if len(picks) < n:
+                logging.getLogger("Greenfield").warning(
+                    f"[eldenring:{world.player}] juice: catalog holds {len(picks)} items at the rarity "
+                    f"floor but the recipe allocated {n}. Spilling {n - len(picks)} slot(s) to junk.")
+                out += [None] * (n - len(picks))
+            out += picks
+        else:
+            members = _members(world, cat)
+            if not members:
+                logging.getLogger("Greenfield").warning(
+                    f"[eldenring:{world.player}] curated_filler category {cat!r} has no members "
+                    f"available (DLC filtered?): spilling its {n} slot(s) to junk.")
+                out += [None] * n
+            else:
+                out += [curated_stack_name(world.random.choice(members)) for _ in range(n)]
+
+    if len(out) != total:
+        raise AssertionError(
+            f"filler_budget produced {len(out)} items for {total} slots -- the allocator and the "
+            f"materialiser disagree. This is a bug in this module, not in the yaml.")
+    world.random.shuffle(out)
+    world.gf_filler_alloc = dict(alloc)          # diagnostics; core exposes it in slot_data
+    return out
+
+
+def classify(world, item) -> None:
+    """RETIRED 2026-08-12 -- kept as a tombstone, like curate() below, so nothing re-adds the pass.
+
+    It existed for ONE reason: juice is intentional USEFUL gear, and some catalog gear -- notably
+    spells and incantations -- carries the GOODS FullID nibble, which core classified `filler`. So
+    this promoted the juice names back.
+
+    The flip removed the reason. `item_categories.CATEGORY_CLASS` classes `spells`, `spirit_ashes`
+    and `crystal_tears` as `useful`, and MEASURED on this catalog: of the 1013 juice names, the
+    number this function still had to promote is **0**. A pass over the pool that changes nothing is
+    not free -- it is a second owner of an item's classification, and this module's whole docstring
+    is about what happens when a resource has more than one owner.
+
+    The property it guaranteed is still guaranteed, and still tested:
+    tests/test_gf_pool_builder_juice_protected asserts juice gear reaches the pool `useful`, and
+    test_every_juice_name_is_useful_from_the_table asserts the TABLE is why. If a future flip
+    demotes a juice category, that test reds -- which is the signal to argue about the category, not
+    to reinstate this.
+    """
+    raise AssertionError(
+        "filler_budget.classify() is retired: item_categories.CATEGORY_CLASS classifies the juice. "
+        "If a juice name is arriving as filler, fix the CATEGORY_CLASS entry, not this.")
+
+
+_JUICE_NAMES = frozenset(juice_order_for_floor(JUICE_FLOOR))

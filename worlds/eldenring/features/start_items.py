@@ -1,0 +1,294 @@
+"""SPEC-PARITY Phase 7 -- starting items (COMPLETE).
+
+Grants starting items the client hands the player at game start. TWO wire paths:
+
+  startItems -- list of FullIDs the client's grant path adds once, settle-gated. For REPEATABLE /
+      capacity grants where a duplicate is harmless (Torch, pot vessels: a second torch or cracked
+      pot is just inventory).
+  uniqueStartGrants -- list of [FullID, obtainedFlag] pairs for UNIQUE key items whose possession
+      the game tracks via a vanilla obtained-flag. The client grants the goods ONLY if the flag is
+      unset, then sets the flag with the grant -- so the flag is the single source of truth for
+      "has it" and a re-run (reload / reconnect / reset) can never double-grant. It also stops the
+      redundant double when the item is ALSO a randomized check whose pool copy the player finds
+      (the pool receive path sets the same obtained-flag: client keyitems.rs / flag poll).
+
+Matt-free (single vanilla item ids, no derivation):
+
+  Lantern -- GOODS id 2070; FullID = 0x40000000 | 2070. So dark caves/catacombs are navigable before
+      you reach a grace, HANDS-FREE (pouch slot, no weapon slot burned). Replaced the old start Torch
+      (WEAPON 24000000). (repeatable path)
+  Spectral Steed Whistle -- GOODS id 130; FullID = 130 | GOODS_NIBBLE(0x40000000) = 1073741954 (the
+      client RE'd Torrent = 0x40000000 | 130). In the shattered/region-lock game Melina's mount
+      hand-off is bypassed (rolled/num_regions starts), so grant the whistle directly so the player
+      can summon Torrent and traverse. On by default. (UNIQUE path, obtained-flag 60100)
+  Spirit Calling Bell -- GOODS id 8158; FullID = 0x40000000 | 8158 = 1073749982 (item_ids.py
+      'Spirit Calling Bell'). Renna's hand-off is as bypassable as Melina's on a shattered start,
+      and without the bell every found summoning ash is inert. On by default.
+      (UNIQUE path, obtained-flag 60110 -- the enable/obtained flag the game gates spirit
+      summoning on; same flag the Limgrave check 7770012 detects and client keyitems.rs sets when
+      the pool copy is received. See memory er-spirit-bell-flag.)
+  Flask of Wondrous Physick -- GOODS id 250; FullID = 0x40000000 | 250 = 1073742074 (item_ids.py).
+      On by default. (UNIQUE path, obtained-flag 60020 -- the acquisition flag the Limgrave check
+      7770011 detects. ⚠ UNVERIFIED IN-GAME: the client's flag-poll baseline work
+      (er-logic flagpoll_baseline_replay.rs) lists 60020 among the flags that read SET on a FRESH
+      save; if that is right, the unique grant SKIPS on a fresh save and this option is inert until
+      confirmed/re-keyed. Alaric: in-game confirm which way 60020 reads at spawn.)
+"""
+from Options import DefaultOnToggle, Toggle
+from ..registry import Feature, register
+from .. import contract
+
+# ER Lantern: GOODS id 2070 (item_ids.py 1073743894 = 0x40000000 | 2070); FullID below. Replaces the
+# old start Torch (WEAPON 24000000): the Lantern lights caves/catacombs HANDS-FREE (equipped in a
+# pouch slot, no weapon slot burned), so it's the strictly better opening light source.
+_LANTERN_FULL_ID = 0x40000000 | 2070
+# Whetstone Knife: GOODS id 8590 (item_ids.py 1073750414 = 0x40000000 | 8590); obtained/acquisition
+# flag 60130 (data.py check for the Gatefront Ruins pickup, AP 7000026, m60_42_37). Granted as a
+# UNIQUE (flagged) start item -- same shape as the steed/bell/physick below -- so Ashes of War /
+# weapon skills work from the opening (the Gatefront hand-off is bypassed on region-lock starts).
+# Setting 60130 as the idempotency latch also collects that vanilla location, exactly like the other
+# uniques collect theirs.
+_WHETSTONE_KNIFE_FULL_ID = 0x40000000 | 8590
+_WHETSTONE_KNIFE_FLAG = 60130
+# Spectral Steed Whistle: GOODS id 130; FullID = id | GOODS_NIBBLE(0x40000000) = 1073741954.
+_STEED_WHISTLE_FULL_ID = 0x40000000 | 130
+# 60100 = the Spectral Steed Whistle OBTAINED-flag. In vanilla, MELINA's mount hand-off sets it, and
+# the game gates Torrent summoning on it -- the whistle GOODS is INERT without it (verified in-game,
+# er-torrent-regionlock-mountless). Set as part of the unique grant, NOT unconditionally: the flag
+# doubles as the idempotency latch ("already has it -> skip").
+_STEED_WHISTLE_FLAG = 60100
+# Spirit Calling Bell: GOODS id 8158 (item_ids.py 1073749982 = 0x40000000 | 8158); obtained-flag
+# 60110 (data.py check 7770012 'Limgrave :: Spirit Calling Bell [f60110]'; client keyitems.rs
+# COMPANION_ACQUIRE_FLAGS).
+_SPIRIT_BELL_FULL_ID = 0x40000000 | 8158
+_SPIRIT_BELL_FLAG = 60110
+# Flask of Wondrous Physick: GOODS id 250 (item_ids.py 1073742074 = 0x40000000 | 250); acquisition
+# flag 60020 (data.py check 7770011). ⚠ fresh-save default-set per the client's flag-poll baseline
+# pin -- see module docstring; in-game confirm pending.
+_WONDROUS_PHYSICK_FULL_ID = 0x40000000 | 250
+_WONDROUS_PHYSICK_FLAG = 60020
+# Starting flasks (prior in-game-verified goods ids): Flask of Crimson Tears = GOODS 1001, Flask of
+# Cerulean Tears = GOODS 1051; FullID = id | GOODS_NIBBLE.
+# NOT folded into uniqueStartGrants (yet): Crimson's acquisition flag is 60000, but Cerulean's flag
+# could not be confirmed from params/repo ground truth (60010 is the obvious pattern guess -- and an
+# invented id silently no-ops, CONTRIBUTING "no invented IDs"), and 60000 itself is pinned as
+# fresh-save default-set (client flagpoll_baseline_replay.rs). So the flasks stay on the plain
+# repeated path until both flags are param/in-game verified.
+_CRIMSON_FLASK_FULL_ID = 0x40000000 | 1001
+_CERULEAN_FLASK_FULL_ID = 0x40000000 | 1051
+# Pot vessels: Cracked Pot = GOODS 9500, Ritual Pot = GOODS 9501. Held throwing-pot capacity == your
+# Cracked Pot count (Ritual Pots for ritual-type pots, e.g. Rancor Pot). Without vessels a granted pot
+# (curated_filler stack OR an item_shuffle vanilla pot) overflows straight to STORAGE and can't be
+# thrown. The client grants startItems one-per-list-entry (grant_full_id(id,1), index-tracked), so we
+# just repeat the FullID N times. Additive -- shuffled vessels stay in the pool as bonus capacity.
+_CRACKED_POT_FULL_ID = 0x40000000 | 9500
+_RITUAL_POT_FULL_ID = 0x40000000 | 9501
+_START_CRACKED_POTS = 10   # throwing-pot capacity at spawn (Alaric playtest)
+_START_RITUAL_POTS = 4     # ritual-pot capacity (Rancor Pot etc.)
+# Perfume Bottle = GOODS 9510: the vessel that holds the DLC perfume/spraymist/aromatic consumables the
+# curated_filler 'perfumes' category hands out (same vessel role Cracked Pot plays for thrown pots).
+_PERFUME_BOTTLE_FULL_ID = 0x40000000 | 9510
+# 🛑 9, NOT 10 -- the CLIENT caps this row (see `POT_DELIVERY_CAPS` in the client's `detour.rs`).
+# A pot's held count reaching 20/10/10 fires a vanilla pot-relief event (1460/1461/1462 -> flags
+# 6902/6903/6904) that force-sets every 66xxx pot lot flag at once, i.e. a burst of phantom checks
+# into the multiworld. The client therefore refuses the grant past the cap -- and, until 2026-07-30,
+# refused it SILENTLY while reporting success, so the 10th bottle was simply never delivered and read
+# absent forever. Asking for more than the cap can never work; it only produces an undeliverable item.
+_START_PERFUME_BOTTLES = 9
+# Hefty Cracked Pot = GOODS 2009500 (DLC): the larger vessel for the DLC 'Hefty ...' throwing pots.
+_HEFTY_CRACKED_POT_FULL_ID = 0x40000000 | 2009500
+# 🛑 9, NOT 10 -- same client cap as the perfume bottle above. Found in Eldakin's 2026-07-29 log:
+# `start-item backfill: ... 10/37 startItems absent -> granting [0x401ea99c x10]`, all ten swallowed.
+_START_HEFTY_CRACKED_POTS = 9
+# Whetblades (GOODS 8970..8974 = item_ids.py FullIDs 1073750794..798, 0x40000000 | 897x): Iron,
+# Red-Hot, Sanctified, Glintstone, Black. Each unlocks its affinity family in the grace "Ashes of War"
+# menu. Granted via the plain startItems path -- ITEM ONLY, NO flag: a whetblade's only vanilla event
+# flag is its pickup flag (65610/65640/65660/65680/65720), which IS this world's randomized CHECK flag,
+# so setting one at start would falsely mark that check collected. The affinity menu keys on possession,
+# so the item alone unlocks it; the whetblade checks stay in the pool. If a DISTINCT affinity-unlock
+# flag turns out to exist, move these to uniqueStartGrants paired with it.
+_WHETBLADE_FULL_IDS = [0x40000000 | g for g in (8970, 8971, 8972, 8973, 8974)]
+
+
+# ==================================================================================================
+# DURABLE-ONLY INVARIANT (#268) -- do not add to this list without reading this.
+# ==================================================================================================
+#
+# The CLIENT deduplicates plain `startItems` by POSSESSION: it scans the bag and grants whatever is
+# absent (client `start_item_backfill.rs` / `er_logic::start_backfill`). That is what retired the old
+# `start_items_granted` boolean, which was keyed (room seed, AP slot) with no character component and
+# so denied a NEW character its start items (client #267).
+#
+# Possession is a valid "already delivered" signal ONLY for a DURABLE item -- one that, once granted,
+# stays visible in the bag. For a stackable CONSUMABLE the player used up, the bag cannot tell "never
+# granted" from "granted and consumed", so the client would cheerfully refill it every launch.
+#
+# Every entry below is durable, with the reason. A new `startItems` entry MUST be added here with its
+# own reason -- and if you cannot write a truthful one, the item does not belong on this path. Use
+# `uniqueStartGrants` (flag-keyed) or design a ledger-only delivery instead.
+#
+# 🛑 This is asserted by `tests/test_gf_p7.py::test_every_plain_start_item_is_durable`, which reads the
+# REAL `slot_data()` output across option permutations -- so the check cannot be satisfied by editing
+# this list alone.
+DURABLE_START_ITEMS = {
+    _LANTERN_FULL_ID: "tool -- occupies a pouch slot, never consumed",
+    # Flasks are refilled at graces, never spent out of the bag. The client additionally treats each
+    # flask FAMILY (Crimson 1000..=1025, Cerulean 1050..=1075, every empty/charged x upgrade pair) as
+    # satisfied by ANY member, so a drained or +N flask still reads present and is not re-granted.
+    _CRIMSON_FLASK_FULL_ID: "flask -- refilled at grace; family-matched client-side",
+    _CERULEAN_FLASK_FULL_ID: "flask -- refilled at grace; family-matched client-side",
+    # Vessels are CAPACITY, not ammunition: throwing a pot consumes the crafted pot, not the vessel.
+    # Their held count only ever rises.
+    _CRACKED_POT_FULL_ID: "vessel -- permanent reusable container, count only rises",
+    _RITUAL_POT_FULL_ID: "vessel -- permanent reusable container, count only rises",
+    _PERFUME_BOTTLE_FULL_ID: "vessel -- permanent reusable container, count only rises",
+    _HEFTY_CRACKED_POT_FULL_ID: "vessel -- permanent reusable container, count only rises",
+    **{f: "tool -- whetblades unlock an affinity family by possession; never consumed"
+       for f in _WHETBLADE_FULL_IDS},
+}
+
+class StartWithLantern(DefaultOnToggle):
+    """Start with a Lantern so dark caves and catacombs are navigable before you reach a grace --
+    hands-free (pouch slot), unlike the Torch it replaces. On by default; turn off for a stricter
+    start."""
+    display_name = "Start With Lantern"
+
+
+class StartWithWhetstone(DefaultOnToggle):
+    """Start with the Whetstone Knife so Ashes of War / weapon skills work from the opening (the
+    Gatefront Ruins hand-off is bypassed on region-lock starts). On by default. Granted only if you
+    don't already have it (obtained-flag 60130)."""
+    display_name = "Start With Whetstone Knife"
+
+
+class StartWithWhetblades(Toggle):
+    """Gives you all five whetblade items in your inventory at the start.
+
+    Grants the items only. Unconfirmed: the game unlocks Ash of War affinities by event
+    flag, which this does not set, so it may unlock none. The whetblade pickups in the
+    world are unchanged. Ignored by Vanilla Placement, which keeps items where the game
+    puts them.
+    """
+    display_name = "Start With All Whetblades"
+
+
+class StartWithSteed(DefaultOnToggle):
+    """Start with the Spectral Steed Whistle so you can summon Torrent and traverse the shattered
+    world (Melina's mount hand-off is bypassed on region-lock starts). On by default. Granted
+    only if you don't already have it (obtained-flag 60100)."""
+    display_name = "Start With Spectral Steed Whistle"
+
+
+class StartWithBell(DefaultOnToggle):
+    """Start with the Spirit Calling Bell so spirit-ash summons work from the opening (Renna's
+    hand-off is bypassed on region-lock starts). On by default. Granted only if you don't
+    already have it (obtained-flag 60110)."""
+    display_name = "Start With Spirit Calling Bell"
+
+
+class StartWithPhysick(DefaultOnToggle):
+    """Start with the Flask of Wondrous Physick so mixed-tear physicks work from the opening.
+    On by default. Granted only if you don't already have it (obtained-flag 60020)."""
+    display_name = "Start With Flask of Wondrous Physick"
+
+
+class StartWithFlasks(DefaultOnToggle):
+    """Start with the Flask of Crimson Tears (HP) and Flask of Cerulean Tears (FP) so you can heal
+    and cast from the opening. On by default."""
+    display_name = "Start With Flasks"
+
+
+# ==================================================================================================
+# THE PLAIN startItems LIST, BUILT ONCE (#308).
+# ==================================================================================================
+#
+# `slot_data` emits this list; `create_items` needs to know its per-item COUNTS, because the start
+# loadout and the shuffled pool draw on the SAME finite stack ceiling and neither one alone can see
+# the total. Two copies of these conditionals would drift the moment an option is added -- and the
+# drift would be silent, because a start loadout the pool clamp under-counts simply reintroduces the
+# bug it exists to prevent. So there is one builder, and `test_gf_goods_hold_cap` asserts the two
+# consumers agree.
+def plain_start_ids(world):
+    """The plain `startItems` FullID list (repeats = quantity), for the given world's options."""
+    items = []
+    if world.options.start_with_lantern.value:
+        items.append(_LANTERN_FULL_ID)
+    if world.options.start_with_flasks.value:
+        items.append(_CRIMSON_FLASK_FULL_ID)
+        items.append(_CERULEAN_FLASK_FULL_ID)
+    if getattr(world.options, "start_with_whetblades", None) and world.options.start_with_whetblades.value:
+        items += list(_WHETBLADE_FULL_IDS)
+    # 🛑 THE POT VESSELS ARE NOT AN OPTION, so vanilla_placement cannot turn them off the way it
+    # turns off the named start_with_* knobs -- they ride `item_shuffle`, which is frozen ON. They
+    # exist because a SHUFFLED pot lands on you with no vessel to throw it from; under vanilla
+    # placement every pot is already where the base game put it, right beside the vessels the base
+    # game gives you, so the premise is gone. Two reasons this is not merely cosmetic:
+    #   * 32 vessels at spawn is the single most visible non-vanilla thing in the bag;
+    #   * they EAT THE HOLD CEILING. start_hold_counts derives from this list, and core's clamp
+    #     pays FILLER for every pool copy past the ceiling -- on the 2026-08-07 smoke seed that was
+    #     21 real vanilla pot items (Cracked Pot x8, Perfume Bottle x7, Ritual Pot x3, Hefty x3)
+    #     replaced by Rune ON THEIR OWN VANILLA LOCATIONS. Dropping the start vessels hands them
+    #     back. A mode that pins items to their vanilla spots must not spend that ceiling first.
+    from . import vanilla_placement as _vp_local
+    _shuf = getattr(world.options, "item_shuffle", None)
+    if _shuf is not None and _shuf.value and not _vp_local.is_on(world):
+        items += [_CRACKED_POT_FULL_ID] * _START_CRACKED_POTS
+        items += [_RITUAL_POT_FULL_ID] * _START_RITUAL_POTS
+        items += [_PERFUME_BOTTLE_FULL_ID] * _START_PERFUME_BOTTLES
+        if getattr(world, "gf_dlc_on", False):
+            items += [_HEFTY_CRACKED_POT_FULL_ID] * _START_HEFTY_CRACKED_POTS
+    # E2 vessel objectives need their full hold capacity after the starting
+    # loadout. Starting gifts are excluded from acquisition evidence.
+    watched = {fid for cell in getattr(world, "gf_bingo_board", ())
+               for group in cell.get("collection", ()) for member in group["members"]
+               for alternatives in member["items"] for fid in alternatives}
+    return [fid for fid in items if fid not in watched]
+
+
+def start_hold_counts(world):
+    """Vanilla item NAME -> how many copies the start loadout grants.
+
+    Only names present in `ITEM_CATALOG` can be counted, which is exactly the set `create_items`
+    draws its pool copies from, so the two are measuring the same thing. `uniqueStartGrants` is
+    deliberately EXCLUDED: those are flag-keyed one-offs, never repeated, and none of them is a
+    stackable good with a ceiling.
+    """
+    try:
+        from ..tables.item_ids import ITEM_CATALOG
+    except Exception:                                   # pragma: no cover - generated module absent
+        return {}
+    by_id = {}
+    for _nm, _full in ITEM_CATALOG.items():
+        by_id.setdefault(_full, _nm)
+    counts = {}
+    for _full in plain_start_ids(world):
+        _nm = by_id.get(_full)
+        if _nm is not None:
+            counts[_nm] = counts.get(_nm, 0) + 1
+    return counts
+
+
+@register
+class StartItems(Feature):
+    name = "start_items"
+    OPTIONS = {"start_with_lantern": StartWithLantern, "start_with_steed": StartWithSteed,
+               "start_with_bell": StartWithBell, "start_with_physick": StartWithPhysick,
+               "start_with_flasks": StartWithFlasks, "start_with_whetstone": StartWithWhetstone,
+               "start_with_whetblades": StartWithWhetblades}
+
+    def slot_data(self, world):
+        items = plain_start_ids(world)
+        # UNIQUE start grants: [FullID, obtainedFlag] pairs. The client grants the goods ONLY if
+        # the flag is unset, then sets the flag with the grant (er-logic unique_grant_action) --
+        # idempotent across reload/reconnect/pool-pickup by construction. These FullIDs must NOT
+        # also appear in the plain startItems list (that path is unconditional and would double).
+        uniques = []
+        if world.options.start_with_steed.value:
+            uniques.append([_STEED_WHISTLE_FULL_ID, _STEED_WHISTLE_FLAG])
+        if world.options.start_with_bell.value:
+            uniques.append([_SPIRIT_BELL_FULL_ID, _SPIRIT_BELL_FLAG])
+        if world.options.start_with_physick.value:
+            uniques.append([_WONDROUS_PHYSICK_FULL_ID, _WONDROUS_PHYSICK_FLAG])
+        if world.options.start_with_whetstone.value:
+            uniques.append([_WHETSTONE_KNIFE_FULL_ID, _WHETSTONE_KNIFE_FLAG])
+        return {contract.START_ITEMS: items, contract.UNIQUE_START_GRANTS: uniques}

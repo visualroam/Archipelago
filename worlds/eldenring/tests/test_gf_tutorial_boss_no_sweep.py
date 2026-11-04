@@ -1,0 +1,1062 @@
+"""The tutorial Grafted Scion must not sweep Stormveil Castle.
+
+MOTIVATING CASE (CONTRIBUTING rule 11), dafranky67 on Nexus 2026-07-29:
+"when i killed grafted scion in the start it gave me like 30 items?" and "i get so much op stuff
+from any boss killed".
+
+It was 36. The game buckets m10_01 (the ruined Chapel of Anticipation intro, where a fresh character
+fights or flees the Grafted Scion) under Stormveil (m10). gen_data's legacy DIVVY then counted the
+Scion as one of Stormveil's legacy bosses and handed it a round-robin slice of the region's filler --
+Ash of War: Storm Assault, Misericorde, smithing stones by Rampart Tower -- for killing an OPTIONAL
+TUTORIAL boss in the first few minutes, from a legacy dungeon gated behind Margit.
+
+🛑 THE LESSON, and why this test is worth its weight: region_groups.py ALREADY excluded this exact
+fold (bucket 10010) from kick-watch geometry, for the same reason, after it CTD'd a playtest. The
+fold had two consumers; one was fixed and the other was not, and nothing connected them. When a
+data fold needs an exception, grep for every consumer of the fold -- an exception applied once is
+not an exception applied.
+"""
+import hashlib
+
+import pytest
+
+pytest.importorskip("worlds.eldenring")
+
+from worlds.eldenring.tables.boss_sweeps import DUNGEON_SWEEPS, SWEEP_REGION  # noqa: E402
+
+# 🛑 THERE ARE TWO GRAFTED SCIONS AND THEY ARE NOT THE SAME FIGHT (Alaric, 2026-07-29). Stormveil
+# Castle has its own Grafted Scion, distinct from the intro one. Only the INTRO one is excluded here.
+# Checked rather than assumed, because excluding the wrong one would both leave the bug in place and
+# silently delete a real Stormveil sweep:
+#   * boss_healthbars holds exactly ONE Grafted Scion -- 10010800, map m10_01 (the intro).
+#   * m10_00's EMEVD declares exactly two banner bosses, 10000800 Godrick and 10000850 Margit. The
+#     Stormveil Scion gets no defeat banner, so it is legitimately absent from a banner-derived
+#     corpus and never had a sweep to lose.
+GRAFTED_SCION = 10010800          # boss_healthbars: ('m10_01', 'm10_01', 'legacy', 'Grafted Scion')
+SCION_OWN_DROP_FLAG = 510030      # Ornamental Straight Sword, a normal check, must SURVIVE
+GOSTOC_BELL_AP = 7773703          # f400051; shifted -1 when dead f400020 left the pool (#1111)
+# (7773841 -> 7773806 on 2026-08-19, #330; 7773806 -> 7773819 same day, full-census regen: +10
+#  restored m21_02 Rada rows and +3 other insertions ahead of it. Flag-verified both times -- the
+#  stale pin was even OWNED by a Liurnia trigger, the exact wrong-check-same-id trap.)
+
+
+def test_the_tutorial_boss_grants_no_sweep():
+    assert GRAFTED_SCION not in DUNGEON_SWEEPS, (
+        "the tutorial Grafted Scion (m10_01) has a sweep again, of %d check(s) in %r. Killing it is "
+        "possible in the first few minutes; its sweep pays out a legacy dungeon gated behind Margit."
+        % (len(DUNGEON_SWEEPS.get(GRAFTED_SCION, [])), SWEEP_REGION.get(GRAFTED_SCION)))
+
+
+def test_msb_placed_pending_map_check_reaches_its_dungeon_sweep():
+    """#562: a stronger region answer must not erase the map used by the sweep consumer."""
+    owners = [trigger for trigger, members in DUNGEON_SWEEPS.items() if GOSTOC_BELL_AP in members]
+    assert len(owners) == 1
+    assert SWEEP_REGION[owners[0]] == "Stormveil"
+
+
+def test_no_stormveil_sweep_is_keyed_on_a_non_stormveil_boss():
+    """The general form: a sweep may only be paid by a boss that lives where the checks live.
+
+    m34_10 is the deliberate exception: its Divine Tower runtime bucket is Stormveil even though
+    its grace geography is Limgrave (#202, Alaric ruling 2026-08-17). m10_01 remains the bad fold
+    this test was created to catch.
+    """
+    from worlds.eldenring.tables.boss_healthbars import BOSS_HEALTHBARS
+    wrong = []
+    for flag, region in SWEEP_REGION.items():
+        if region != "Stormveil":
+            continue
+        info = BOSS_HEALTHBARS.get(flag)
+        if info and info[0] not in ("m10_00", "m34_10"):
+            wrong.append((flag, info[0], info[3]))
+    assert not wrong, (
+        "a Stormveil sweep is keyed outside Stormveil's approved m10_00/m34_10 maps: %s. m10_01 "
+        "is the intro map and rides Stormveil's bucket; it is not IN Stormveil." % wrong)
+
+
+def test_the_scions_own_drop_is_untouched():
+    """The fix removes a sweep, not a check. The boss's own reward is a normal location."""
+    from worlds.eldenring.tables.data import LOCATIONS
+    names = {name for rows in LOCATIONS.values() for (name, _ap, flag) in rows
+             if flag == SCION_OWN_DROP_FLAG}
+    assert any("Ornamental Straight Sword" in name for name in names), (
+        "the Grafted Scion's own drop (Ornamental Straight Sword, f%d) vanished. The sweep "
+        "exclusion must not remove the boss's reward check -- that is a different mechanism: %r"
+        % (SCION_OWN_DROP_FLAG, sorted(names)))
+
+
+def test_the_sweep_corpus_did_not_shrink():
+    r"""Removing the Scion redistributes Stormveil's pool; it must not DELETE checks from it.
+
+    A fix that quietly drops coverage is the same bug pointed the other way -- the pool is
+    partitioned round-robin, so losing a boss means bigger slices for the real ones, not fewer
+    checks. 3197 was the count when the Scion exclusion landed.
+
+    3197 -> 3187 (2026-08-01, legacy region-major routing audit). WHY, as this docstring demands --
+    two fixes in one pass, net -10:
+
+    +3  THE FINALE MAPS. Gideon, Godfrey/Hoarah Loux and Radagon/Elden Beast live on m11_05 and
+        m19_00, whose _mreg vote was a TIE -- {Leyndell 3, Ashen Capital 3, Limgrave 1} and
+        {Leyndell 1, Liurnia 1} -- broken to Leyndell by Counter insertion order. Now pinned to Ashen
+        Capital, whose three checks (ap 7771131/7771132/7771133) previously belonged to NO sweep.
+        Leyndell's pool is unchanged at 64; it re-divvies across 2 triggers instead of 6. That is the
+        point: 42 of those 64 hung off post-burn bosses, and the burn warps you into m11_05
+        PERMANENTLY, so they could never fire from base Leyndell.
+
+    -13 THE HUB LEAK. m12_04 (Astel), m12_08 (Ancestor Spirit) and m12_09 (Regal Ancestor Spirit) got
+        no vote at all and fell through `or HUB`, so those three were paying out ROUNDTABLE HOLD --
+        13 checks in a region that is open from turn one, for kills in the Eternal Cities. Pinned to
+        Ainsel River / Siofra River / Siofra River from the repo's own tables. Those regions' pools
+        are unchanged (101 and 147); they simply gained triggers. The 13 hub checks are still
+        obtainable by normal pickup -- a sweep is a convenience auto-grant, not the only source.
+
+    The `or HUB` fallback is GONE, replaced by a gen-time assert naming every offender, so the next
+    unregioned region major fails the build instead of quietly banking itself in the hub.
+
+    Trigger count 241 -> 240: Ashen Capital's pool is 3 checks across 4 triggers, so the 4th
+    (19000810 Radagon) gets an empty slice and is dropped. Harmless -- Radagon and the Elden Beast
+    are ONE fight and 19000800 still carries it -- but it is why SWEEP_REGION is not a boss ROSTER.
+    Anything needing "every boss in region R" must read BOSS_HEALTHBARS.
+
+    3187 -> 3189 (2026-08-03, TWO tile curations -- gen_data.M60_TILE_CURATED). Trigger count
+    unchanged at 240, no member LOST, two GAINED, ten sweeps re-partitioned. WHY:
+
+    Both tiles hold no grace of their own, so tile_pr() nearest-neighboured them; both TIED at
+    distance 1 between a Limgrave anchor and a Caelid one; both ties were settled by the row order
+    of grace_flags.tsv. They fell OPPOSITE ways and both were wrong.
+
+      m60_45_39  Summonwater Village / Third Church of Marika   Caelid   -> Limgrave  (12 checks)
+      m60_47_38  Fort Gael                                      Limgrave -> Caelid    (15 checks)
+
+    +2  ap 7774626 / 7774627 ("Smoldering Butterfly", m60_47_38) belonged to NO sweep, because the
+        nearest field boss inside Chebyshev 2 of them was regioned across the seam from them and the
+        nearest-boss pass is same-region. With m60_47_38 in Caelid they join the Caelid sweep
+        1048370800 (13 -> 26). Nothing else entered the corpus.
+
+     0  net redistribution across ten sweeps. 1045390800 (Summonwater) flips Caelid -> Limgrave,
+        19 -> 24; seven neighbouring Limgrave field bosses shed what is now nearer to it; the Caelid
+        pair 1047400800 (20 -> 27) and 1048370800 (13 -> 26) take back the Caelid ground. Every one
+        of those moves is a check changing WHICH boss grants it, not whether.
+
+    The bug: on a seed without Caelid the Summonwater trigger, its members and the Tibia Mariner's
+    Deathroot (f530170) did not exist, so felling him paid nothing -- reported 2026-07-24 (Alaric)
+    and again 2026-08-03 (boblerrr). Fort Gael is the same defect pointed the other way, found when
+    Alaric answered a region-confirmation form and gave two different answers for one tile. See
+    test_gf_boss_sweeps.test_summonwater_killsite_checks_are_limgrave.
+
+    -18  (2026-08-04, #363) THREE SECONDARY ARENA HEADS lost their sweep: 30100801 Crucible Knight
+        (m30_10, 8 members), 30120801 Perfumer Tricia (m30_12, 3) and 32050801 Crystalian (Spear)
+        (m32_05, 7). Each is one head of an arena that ANOTHER head on the SAME map reports --
+        GameAreaParam gives each of them defeat_flag != its own id and bonus_soul 0 -- while dungeon
+        members are keyed on the MAP, so every head held the SAME list and the sweep paid the whole
+        dungeon out when any one of them flipped. bobler got 7 Altus Tunnel checks on ENTERING the
+        boss room, 69 seconds before the fight ended, after which the Crystalian he killed dropped
+        nothing. The three PRIMARY triggers keep those members in full, so NO check left the corpus
+        -- only the duplicate copies did (3189 -> 3171). See
+        test_gf_boss_sweeps.test_no_secondary_arena_head_carries_a_sweep.
+
+    -82  (2026-08-04, #363 part two) TWELVE MORE SECONDARY HEADS, from the EMEVD defeat banner
+        rather than GameAreaParam. Trigger count 240 -> 225. Again NO CHECK LEFT THE CORPUS: every
+        one of these is a duplicate copy of a list its arena's PRIMARY still holds in full, which is
+        why the arithmetic is exactly the suppressed heads' own member counts --
+
+          m30_14  30140801  Erdtree Burial Watchdog (Scepter)         4
+          m31_06  31060801  Crystalian (Spear)                        2
+          m31_07  31070801  Kindred of Rot                            7
+          m31_10  31100801  Beastman of Farum Azula (Throwing Knife)  5
+          m31_11  31110801 + 31110802  Putrid Crystalian x2          24  (12 each)
+          m31_15  31150801  Demi-Human Chief                          3
+          m31_18  31180801  Omenkiller                                8
+          m31_20  31200801  Cleanrot Knight (Sickle)                  4
+          m31_22  31220801 + 31220802  Godskin Apostle / Noble       18  (9 each)
+          m34_14  34140851  Fell Twin                                 7
+                                                                  ---- 82
+
+        61 DISTINCT checks stop being payable by a boss the player has not fought. m34_14 is the one
+        bobler confirmed live: he got its 7 checks on ENTERING the arena. GameAreaParam could not
+        reach any of these -- it has no row for 34140851 at all -- so the discriminator is the game's
+        own `HandleBossDefeatAndDisplayBanner`, which names ONE reporter per fight.
+
+        Two of these contradict the guesses on #363's handoff, and the EMEVD wins: m31_18 (Miranda
+        the Blighted Bloom + Omenkiller) was guessed SEPARATE and is one banner over both deaths;
+        m31_22's Godskins are SUMMONS the snail's flag force-kills, not co-required heads.
+
+        STILL SHARED, deliberately: m30_05, m30_13, m31_00 and m31_19 (32 checks). Each fires TWO
+        banners, so each is genuinely two fights -- they need PARTITIONING and must NOT be
+        suppressed. m31_19 Sage's Cave is pinned as the negative control in
+        test_gf_boss_sweeps.test_sages_cave_retains_BOTH_triggers.
+
+    -32  (2026-08-04, #363 part three -- the PER-MAP DIVVY) those four maps now PARTITION their
+        filler between their two bosses instead of each holding the whole list. Trigger count is
+        UNCHANGED at 225: both heads keep their trigger, because both fire their own defeat banner
+        and suppressing either would delete a real boss's reward.
+
+          m30_05  Black Knife Catacombs   4 checks -> 2 / 2
+          m30_13  Auriza Side Tomb       10        -> 5 / 5
+          m31_00  Murkwater Cave          4        -> 2 / 2
+          m31_19  Sage's Cave            14        -> 7 / 7
+                                        ---- 32 duplicate member links removed
+
+        NO CHECK LEFT THE CORPUS AGAIN -- the -32 is exactly the duplicate second copy of each pool.
+        Every check is still granted by exactly one of the map's two bosses, and the union per map
+        is unchanged (test_the_multi_fight_dungeons_still_PARTITION_their_whole_pool pins it).
+
+        WHY a round-robin and not an ownership rule: there is no owner to find. None of the 32
+        carries an EMEVD arena association, and every one is untagged FILLER -- cave pickups, not
+        boss rewards. Nearest-boss geometry was measured and REJECTED: all 14 Sage's Cave checks are
+        nearer Necromancer Garris by 20-30m (the arenas are 39.8m apart while the checks sit 33-72m
+        from both), so it would hand Garris 14 and the Black Knife Assassin 0. This is the same
+        shape the LEGACY divvy has solved since 2026-07-11, so it uses the same partition.
+
+        Player-visible: each of these eight bosses now grants about half what it did. That is the
+        correction -- granting all of it was the bug.
+
+      0 (2026-08-05, the m60 TILE DECODE fix) trigger count 225 -> 226, corpus UNCHANGED at 3056.
+        NOTHING entered or left; 29 member links moved between Mountaintops field bosses.
+
+        1248550800 -- the Night's Cavalry duo by Yelough Anix Tunnel -- had tile 'm60_48' instead of
+        'm60_48_55', because datamine_boss_healthbars decoded overworld tiles only for ids starting
+        "10". Overworld ids also come in a 12-form; Radahn, the Fire Giant and Borealis survived the
+        "10"-only rule because for THEM the 12-form is the flag over a 10-form entity, while this
+        arena's entity IS its flag (game_areas.tsv flag_equals_id=yes). gen_data's field pass matches
+        `^m60_(\d\d)_(\d\d)$`, so the bare map was rejected and the boss granted NOTHING.
+
+        Now it holds 29 members and five neighbours shed exactly those, the nearest-boss partition
+        being disjoint -- 1048570800 41->30, 1050560800 39->28, 1049520800 17->14, 1050570850 8->6,
+        1050570800 7->5, plus a same-size swap on the Fire Giant 1252520800. Every move is a check
+        changing WHICH boss grants it, never whether.
+
+        The decode is now guarded by a SECOND DERIVATION rather than a longer prefix allowlist: the
+        decoded tile must be one an emevd actually exists for. Measured over the corpus, all 79 field
+        bosses agree with the emevd file they are defined in, 0 disagreements, one entry changed.
+        See test_gf_boss_sweeps.test_every_field_boss_tile_decodes (which also removes a `continue`
+        in test_field_sweeps_are_local that had been excusing exactly this boss).
+
+    +150 (2026-08-05, SPEC-broaden-sweeps PIECE B) 3056 -> 3206. Trigger count UNCHANGED at 226 and
+        NOTHING left the corpus -- 150 checks entered it, and every one already had a known map.
+
+        `_swept` admitted a minor-dungeon row only when its method was `flag_prefix`. But
+        `global`/`global_filler` is a statement about an item's DISTRIBUTION -- region_map's own
+        column reads `Global / Filler (scattered by design)` -- not about whether THIS pickup has a
+        place. 127 of them sat on a minor-dungeon map that ALREADY hosted a boss with a working
+        map-local sweep. Motivating case: Ruin-Strewn Precipice (m39_20), where Magma Wyrm Makar
+        granted NONE of the 21 pickups you fight past on the way down.
+
+        Where the 150 landed:
+          dungeon 87 · catacomb 30 · cave 9  = 126 map-local, the intended target
+          legacy  24                         = rows on a minor-dungeon map with NO boss on it, which
+                                               fall through to the region divvy. A side effect of
+                                               admitting them to _mem_region -- measured rather than
+                                               assumed, and kept: they are region-correct and were
+                                               granted by nobody before.
+
+        No sweep-region flips; no trigger added or removed. m30_13's partition pool grows 10 -> 14
+        (four Living Jar Shards around Auriza Side Tomb) and stays a 7/7 split.
+
+        TWO were REFUSED, and this branch carries a filler cut the older ones do not because of them:
+        a Sacred Tear at Ruin-Strewn Precipice (7774250, Church) and [Incantation] Knight's Lightning
+        Spear at Scorpion River Catacombs (7774275, Legendary). The map path has never applied
+        `_filler_only` -- test_gf_dungeon_sweep_rungs ratchets six pre-existing important members and
+        says fixing that wholesale needs its own balance argument. This change does not touch those
+        six; it just refuses to grow them.
+
+        Scoped to _is_dungeon deliberately: legacy interiors are the same defect and worth ~280 more,
+        but they need a map-local legacy pass that does not exist yet (piece C), and admitting them
+        here would silently route them into the coarser region divvy instead.
+
+    +270 (2026-08-05, SPEC-broaden-sweeps PIECE C) 3206 -> 3476. A legacy boss now sweeps its OWN
+        MAP's filler before the region divvy sees the pool -- "this boss's building" instead of
+        "1/Nth of the region". Shadow Keep 129, Leyndell 77, Mohgwyn 25 lead it. Nothing left the
+        corpus, no check is granted twice, no sweep region flipped.
+
+        THREE things this pass had to get right, each measured rather than assumed:
+
+        * INTERIORS ONLY. `_class` calls the m61 DLC OVERWORLD "legacy", so an unfiltered
+          legacy-map set pulls in m61_XX BANDS -- and a band spans several fine-regions, which is
+          exactly why those bosses needed tile recovery for the divvy. 209 DLC checks walked in
+          before this was scoped out. The overworld wants a neighbourhood (piece A), not a map.
+        * GROUPED BY THE BOSS'S REGION, not the map's majority. A trigger carries ONE SWEEP_REGION
+          and a legacy boss also holds a region slice, so filtering by map-majority could mis-region
+          the trigger -- m10_00 is Stormveil 3 / Weeping 2 and m12_05 is Mohgwyn 25 / Liurnia 1.
+        * `_filler_only`, which the dungeon map path has never applied. Without it this pass swept
+          282 important-tagged checks the region divvy had always been filtering out. A new pass does
+          not inherit an old pass's hole.
+
+        THE CLAWBACK, and why Astel needs it. The map-local pass is deliberately greedy (a specific
+        boss beats the region major, as the field/dungeon dedup has always done), so a region's
+        leftover pool can empty. Astel's arena m12_04 is a bare boss room; every "Eternal Cities"
+        check physically lives in m12_01 and m12_02, which now belong to the bosses standing in them.
+        Astel went 33 -> 0 -- not losing a claim to anything of its own, losing a consolation slice
+        of a pool that no longer exists. Dealing the remainder to the emptiest bosses first (also
+        added here) rescued two Shadow Keep bosses 9 -> 1 but cannot help Astel: Ainsel River's
+        remainder is genuinely EMPTY. So a starved region major claws back a share from the largest
+        holder in its own region, re-dealt round-robin: Astel 26, its donor 27.
+
+        m19_00 is EXEMPT BY MAP: Radagon and the Elden Beast are one fight on a map with no filler,
+        and a convenience grant at the end of the run is not a convenience. Keyed on the MAP because
+        the first cut exempted only 19000800 and 19000810 promptly clawed back instead -- an
+        entity-keyed exemption on a two-head arena protects exactly half of it. Elden Beast 1 -> 0 is
+        therefore the ONE trigger this change removes, deliberately.
+
+    +225 (2026-08-05, SPEC-broaden-sweeps PIECE A -- the DLC overworld) 3476 -> 3701. NOTHING lost,
+        no trigger removed, no sweep region flipped, and -- the thing this piece could have got
+        wrong -- NO REGION SHRANK. The 28 m61 bosses hold 247 -> 476 members.
+
+        They are classed `legacy` and STAY that way. A reclass to `field` was the obvious move and is
+        a NET LOSS: they are their regions' divvy hosts, 268 members hang off them, and Gravesite,
+        Ensis, Rauh Base, Cerulean and Jagged Peak have no other host at all. So the neighbourhood is
+        ADDITIVE -- the field pass runs first, `_covered` takes what it claims out of the divvy pool,
+        and the two never double-grant.
+
+        Three things had to be true, and each was verified rather than assumed:
+
+        * THE TILE. `DisplayBossHealthBar` carries only the coarse `m61_XX` BAND, so the field pass
+          could never place these bosses. Their id encodes the real one (20XXYYLLLL, the DLC sibling
+          of the base game's 10/12 forms) -- the same decode gen_data already trusted for the divvy
+          (`_M61_BOSS_RE`), now recorded on the boss table and guarded by the same second derivation:
+          all 28 land on a tile that HAS an m61 emevd, 28/28.
+        * THE GRID. `_tile_xy` held a bare (x, y). m60 (44,45) and m61 (44,45) are different places
+          on different continents, and comparing them yields a small, meaningless distance -- a DLC
+          boss quietly claiming base-game checks. Every comparison is now grid-guarded (`_near`) and
+          test_overworld_sweeps_never_mix_GRIDS states it independently.
+        * THE ADMISSION. `_mem_tile` is fed from rows that passed `_swept`, and a `global_filler` on
+          m61_46_46 passed none of its branches -- so the first cut of this pass ran over an EMPTY
+          grid and claimed exactly 0 checks while looking perfectly healthy. A row that already names
+          an overworld tile is now admitted on that basis.
+
+        The +225 (vs ~217 predicted) is the m61 population plus a handful of m60-tiled rows the same
+        admission rule legitimately picks up.
+
+    -13 (2026-08-05, spell-vendor MERCHANT re-key) 3701 -> 3688. NOTHING was removed from a sweep by
+        geometry; 13 checks became INELIGIBLE for sweeps because they were finally tagged.
+
+        `_FIELD_EXCLUDE_TAGS` holds the shop tags, and these 13 carried NO shop tag at all: the
+        spell-vendor classifier was keyed on the ShopLineupParam 100-block, so a check whose block
+        was spell-heavy was passed over entirely and never got `ShopNonSpell`. Untagged, they read
+        as ordinary overworld filler and were being GRANTED BY KILLING A BOSS despite being merchant
+        stock. Re-keying the classifier onto the talk ESD tags them, and the tag excludes them.
+
+        Verified as exactly the tag-changed set, by set-difference rather than inferred from the
+        total moving: 0 checks were ADDED to any sweep, 13 were removed, and (added | removed) is a
+        subset of the checks whose LOCATION_TAGS changed in the same regen.
+
+    +3 (2026-08-07, #249 de-dup re-key) 3688 -> 3691. The corpus GREW, and nothing was removed.
+
+    -6 (2026-08-08, the Shop umbrella fix) 3691 -> 3685. SIX MEMBERS LEFT ONE SWEEP AND NOTHING
+        ELSE MOVED -- diffed by (trigger, flag) against main, 6 removed, 0 added, 0 re-owned. All six
+        came off dungeon trigger 1034500800, and all six are PRECEPTOR SELUVIS'S SORCERY SHOP ROWS:
+
+          7770266 Glintstone Cometshard   7770269 Swift Glintstone Shard
+          7770267 Star Shower             7770270 Glintblade Phalanx
+          7770268 Great Glintstone Shard  7770271 Carian Slicer
+
+        Felling a Liurnia catacomb boss was auto-granting six of Seluvis's shop slots. Shop classes
+        are in gen_data._FIELD_EXCLUDE_TAGS precisely so merchant stock is never sweep filler, and
+        the exclusion was reading the `Shop` TAG -- which came from the region_map `method` column,
+        while ShopNonSpell/ShopSlot came from the stock FLAG. These six sit in the 35-row gap between
+        those two predicates, so the exclusion could not see them. One predicate now
+        (gen_data._is_shop_row), and the sweeps lose stock they should never have held. No check left
+        the sweep corpus for any other reason, and all six remain normal shop checks.
+
+        The #249 regen re-keyed the unplaced-global de-dup off the ITEM NAME, which recovered 16
+        locations that the old key had been silently dropping. Three of those 16 sit in
+        sweep-eligible dungeon geometry and are therefore sweep corpus by the same rule as their
+        neighbours -- no rule changed, the input did:
+
+            Raya Lucaria Academy :: Starlight Shards - around Church of the Cuckoo [f400103]
+            Shadow Keep :: Furnace Visage - around Storehouse, First Floor  [f400612]
+            Stormveil :: Erdsteel Dagger - around Castleward Tunnel         [f400221]
+
+    -8 (2026-08-08, the SECOND boss reward mechanism) 3685 -> 3677. Diffed by (trigger, flag) as
+        this file demands: **8 LOST, 0 GAINED, 60 RE-OWNED, and ZERO of the re-owned crossed a sweep
+        REGION** -- so the churn is pacing, not reachability (#445's shape is absent).
+
+        The 8 that left are the point of the change, not a cost of it. Each is now `Boss`-tagged
+        because `Boss` began reading the scripted-reward mechanism (BOSS_REWARD_DEFEAT) as well as
+        the handler-drop one, and gen_data's `_filler_only` cut keeps premium classes out of the
+        legacy sweep pool. They are boss drops, so a filler sweep should never have been handing them
+        out:
+
+          7770027 Talisman Pouch (Divine Tower of Caelid)   7770787 Assassin's Cerulean Dagger
+          7770757 Gargoyle's Greatsword (Underground Road)  7770788 Viridian Amber Medallion
+          7770783 Noble Sorcerer Ashes (Elden Throne)       7770791 Death Knight's Twin Axes
+          7770784 Assassin's Crimson Dagger                7770785 Banished Knight Engvall
+
+        The 60 re-owned are the multi-boss divvy re-phasing on its stable modulus -- adding members
+        to a map's pool shifts the phase for everything after them (#363). Every one stayed with a
+        boss in the same region.
+
+        🛑🛑 VERIFIED BY NAME, NOT BY AP ID, AND THE DIFFERENCE IS THE WHOLE POINT. The same regen
+        RENUMBERED the ap id space, so an id-level set-difference reads 615 members added and 612
+        removed -- 1227 lines of pure noise that hide the three real ones. Keyed on the LOCATION
+        NAME it is exactly +3 / -0. An id that resolves is not a match; when a regen can move the
+        id space, only a structural key answers "what actually changed"."""
+    total = sum(len(v) for v in DUNGEON_SWEEPS.values())
+    # 3057 -> 3056 (2026-08-04): ONE check left the corpus, and it left for a reason.
+    # ap 7771251, "Siofra River :: Fingerslayer Blade", was a member of sweep trigger 12020830. It is
+    # now MISSABLE (label `questline_item`: the item is handed to Ranni), and a missable check is not
+    # sweep corpus. Verified as exactly one check, by set-difference against main -- not inferred
+    # from the total moving by one.
+    # 🛑 THE TOTAL CANNOT SEE A PERMUTATION -- see test_the_sweep_OWNERSHIP_did_not_churn below.
+    #
+    # +49 (2026-08-09, #495 -- a bossless map's checks reach their region's remainder pool) 3677 ->
+    # 3726. `_LEGACY_SWEEP_MAPS` is the set of maps that HOST a legacy boss, and the membership gate
+    # reused it to decide which checks MAY BE swept -- so m21_02 (West Rampart), which hosts no
+    # healthbar boss, was excluded from Shadow Keep's remainder pool BECAUSE it has no owner, when
+    # having no owner is that pool's whole qualification. Shadow Keep's remainder was 5 against 271
+    # locations; Commander Gaius, who owns a tile and no building, paid ONE check (bobler, 2026-08-09).
+    # Diffed by (trigger, flag), never by ap id: ADDED 52, REMOVED 3, RE-OWNED 3, net +49.
+    # Added by region: Shadow Keep 39, Siofra River 13. All three REMOVED are the same three that were
+    # RE-OWNED -- 21027050, 21027230, 21027250 moved between Shadow Keep triggers as the divvy modulus
+    # re-phased around a larger pool, exactly the #363 effect. SWEEP_REGION is 'Shadow Keep' on both
+    # sides for all three, so that is a pacing change and not a reachability one.
+    # The same +3 regen ALSO moved 133 existing members to a different boss.
+    # +6 (2026-08-09, TILE_ROW_REGION -- a graceless tile regioned by PlayRegionParam's own row)
+    # 3726 -> 3732. NOT a sweep change: 219 triggers before and after, and no check was created or
+    # destroyed. Twenty-two checks moved region, and the swept SHARE of a region is a function of its
+    # check count and its trigger count, so moving seven checks out of Cerulean and into Charo's
+    # (50 -> 43 checks / 3 -> 2 triggers, and 20 -> 27 / 1 -> 2) lets the round-robin remainder reach
+    # six checks in Charo's it could not reach before. ADDED 6, REMOVED 0, all six in Charo's --
+    # diffed by (trigger, flag) against main, not inferred from the total.
+    # The Gravesite -> Rauh Base thirteen did NOT churn: their trigger (2046450800) changed region
+    # with them, so they keep the same owner and the group stops being one of #445's six.
+    # -1 (2026-08-11, #556 -- m10_00 curated into DUNGEON_REGION_OVERRIDE) 3732 -> 3731.
+    # ONE member left: ap 7773841, "Stormveil :: Gostoc's Bell Bearing - near Gateside Chamber"
+    # (f400051). ADDED 0, REMOVED 1, RE-OWNED 3, and all three re-owned stayed inside Stormveil.
+    # 🛑 IT IS NOT A REGION MOVE -- the check reads Stormveil before and after. It is region_of's
+    # SIDE EFFECT going away. f400051 is MSB-placed in m10_00, so with m10_00 now resolvable the
+    # MSB-ground-truth branch answers it and returns; previously that branch failed, the row fell
+    # through to the global-recovery branch, and THAT branch sets `r['map'] = _im` as a side effect
+    # of answering. The sweep pools are keyed on the map column, so the check was only ever
+    # sweep-eligible because a worse branch had answered it. Getting the region right took the map
+    # away. The check is unaffected as a check: it exists, it is in Stormveil, and it is obtainable
+    # by physical pickup -- a sweep is a convenience auto-grant, not the only source.
+    # ▶️ FILED SEPARATELY, NOT FIXED HERE. Recording the map in the MSB branch as well restores this
+    # member AND adds 49 more (3732 -> 3782, 34 re-owned) -- a 50-check sweep change has no business
+    # riding inside a merchant-region fix, so it is its own issue with its own diff.
+    # +145 (2026-08-13 -- the per-seed surface cut) 3731 -> 3876. gen_data's cut stopped being the
+    # whole 16-class SURFACE_CLASSES vocabulary and became the FLOOR only (_SWEEP_NEVER_TAGS);
+    # Seedtree/Church/Fragment/Revered/Basin/Legendary are admitted into the bake and cut per seed
+    # by features/boss_locks.sweep_surface_cut against that seed's Progression Surface. ADDED 145,
+    # REMOVED 0, triggers 218 before and after: Legendary 47, Seedtree 38, Fragment 22, Revered 21,
+    # Church 13, Basin 4, over all 29 regions. Every one carries exactly ONE tag -- no combos --
+    # because a check that also carried a floor tag was, and stays, excluded.
+    # 🛑 THIS NUMBER IS THE BAKE, NOT WHAT A SEED GRANTS. A default-surface seed sees 3876 - 94 =
+    # 3782 (Church/Seedtree/Fragment/Revered are in contract.SURFACE_DEFAULT_CLASSES); an
+    # empty-surface seed sees all 3876. The per-seed arithmetic is asserted in
+    # test_gf_dungeon_sweep_rungs, on the output of enabled_sweeps, which is where it is observable.
+    # +169 (2026-08-13, #191) 3876 -> 4045. WHY, as this gate demands: co-check SIBLINGS now
+    # inherit their primary's sweep membership. The member loop walks `rows` POSITIONALLY
+    # (`_ap = BASE_AP + _i`), so a registry ap_id in the COCHECK band was structurally invisible to
+    # it and NO co-check had ever been swept -- including the original five. A sibling is the same
+    # physical acquisition as its primary: if killing the boss sweeps the primary, the player has
+    # already picked the sibling off the same corpse, so leaving it out marked a check that is
+    # provably in hand as unfound. gen_data MIRRORS the primary's membership rather than re-deriving
+    # it, so a sibling cannot be swept into a region its primary was not (the #445/#598 class), and
+    # the map-region vote is deliberately NOT re-cast -- one physical pickup votes once.
+    # Alaric's ruling, 2026-08-13: all co-checks are swept with their primary.
+    # -1 (2026-08-16, #737) 4045 -> 4044. WHY: flag 60510, `Talisman Pouch`, stopped being SWEPT
+    # FILLER and became the check Margit's death GRANTS. It had no boss attribution at all until now
+    # -- datamine_boss_reward_lots discarded its row as "reward flag flipped by 2 maps", because
+    # Morgott's defeat event back-fills the same reward flag behind `if (!EventFlag(9100))` (Margit
+    # and Morgott are one character, so killing Morgott implies Margit). With the back-fill
+    # distinguished from an ownership claim, the check resolves to Margit's own trigger 10000850 --
+    # and a boss's REWARD cannot also be one of the members its own defeat sweeps, so it leaves the
+    # corpus. Exactly one check, and it is the one the fix was about. The reshuffle between
+    # 10000800 and 10000850 in the same regen is the m10_00 pair re-partitioning 111 members instead
+    # of 112 (the DIVVIED path), not membership crossing a region boundary.
+    # -10 (2026-08-17, #653): 4044 -> 4034. All ten removals are the Carian Study Hall inverted
+    # layout: flags 34117100/110/120, 34117400/401/402/403, 34117500 (two co-checks), and 34117710.
+    # Trigger 34110800 is reachable on the ordinary layout, before the Carian Inverted Statue changes
+    # the map, so sweeping those checks from it bypassed the new key gate. The five ordinary-layout
+    # checks stay on that trigger. ADDED 0, RE-OWNED 0; physical pickup remains their only award path.
+    # -1 (2026-08-17, #664): 4034 -> 4033. REMOVED only: flag 2053467600 / ap 7773804 is the
+    # Finger Ruins of Rhia bell reward, gated by the Hole-Laden Necklace. It shared the Scadu Altus
+    # legacy pool with Rakshasa (trigger 2051440800), an unrelated fight reachable without the
+    # necklace. The check stays obtainable at the bell; only the gate-bypassing convenience award
+    # is gone. ADDED 0, RE-OWNED 0.
+    # -1 (2026-08-17, #665): 4033 -> 4032. Retagging BOTH bell interactions as KeyItem generalises
+    # #664's Rhia exclusion and also removes Dheo (flag 2050407000) from Bayle's filler sweep. The
+    # two removals are now the same policy: a necklace-gated quest action is not filler an unrelated
+    # boss may grant. Rhia was already absent, so this stack removes only Dheo. ADDED 0, RE-OWNED 0.
+    # +89 (2026-08-18, #562): 4032 -> 4121. MSB placement was already the authority for 59 checks'
+    # regions, but region_of returned before copying that same known map onto rows whose scanner map
+    # was PENDING. The map-keyed sweep consumer therefore could not see them. Recording the MSB map
+    # adds 59 physical flags plus 30 co-check siblings, removes 0, and re-owns 45 existing flags.
+    # Verified by (trigger, flag): all 59 additions are swept inside their location region and all
+    # 45 re-owned flags stay inside their previous region. Gostoc's bell above is the motivating case.
+    # -124 (2026-08-19, #330): 4121 -> 3997. The worldless Rada Fruit rows left the corpus with
+    # their locations (gen_data._RADA_WORLDLESS): 55 rows no datamine can place in the world plus
+    # 69 m21 bundle-stack rows (up to 12 flags on ONE physical corpse) -- the boss sweep was the
+    # ONLY real award path these ever had, which is exactly why they must not be checks. Measured
+    # by (trigger, flag): every removed pair's flag is in the exclusion set; the same measurement,
+    # with the divvy re-phase it triggered, is recorded at the OWNERSHIP digest below.
+    # +106 (2026-08-19, the full-census regen): 3997 -> 4103. The doubled MSB census gave real
+    # maps to checks the sweeps could never see: the 10 restored m21_02 Rada corpses, the 4 Royal
+    # fillers un-orphaned by the Ashen-twin fold (11007215/11007820/11007860/11007900 back with
+    # Morgott), the 4 dungeon cookbooks admitted by method (68000/68660/68680/68700), Midra's 3,
+    # Cerulean's 8, and the divvy growth those re-deals pulled in. Measured by (trigger, flag):
+    # 239 removed / 339 added / 237 re-owned; exactly ONE re-own crosses a region boundary --
+    # f2047457180, whose REGION itself flipped Scadu Altus -> Gravesite in the same regen (one of
+    # the nine ground-truth corrections), so its sweep followed its check.
+    # 2026-08-19: main's #896 pin was 3997; the full census (+placed rows) then the
+    # worldless-singles cull (-85 sweep-slotted flags) lands at 4018. Cull delta measured by
+    # (trigger, flag): 387 removed (85 the cull itself, the rest the divvy re-phase it
+    # triggered) / 300 added / 304 re-owned, and ZERO re-ownerships cross a region boundary.
+    # 2026-08-21 (#940): 4100 -> 4101. The un-culled Four Belfries Imbued Sword Key
+    # (f1033477020, ap 7774215) joined the sweep of its nearest same-region field boss, the
+    # Royal Revenant (trigger 1034480800, m60_34_48 -- Chebyshev 2 from the chest's m60_33_47).
+    # The nearest-boss tie-split round-robin re-dealt 148 distance-tied checks to their tied
+    # partner triggers across 10 regions; measured by (trigger, flag): 148 removed / 149 added,
+    # every re-dealt flag KEEPS a same-region owner (0 region-crossing re-owns), and no check
+    # left the corpus.
+    # 2026-08-26 (#1054/#1046, the rest of the PlayArea-scan adjudication): 4101 -> 4100, and the
+    # -1 is a DROP that is being recorded rather than re-baselined. Sixteen more scan-exact,
+    # ground-placed pickups take the region the scan says they physically stand in. Fifteen of them
+    # simply re-home to a trigger in their NEW region (measured pair-by-pair: 29 removed / 28 added
+    # / 28 re-owned, 15 of which cross a region boundary BY DESIGN -- the check moved region, so its
+    # granter moved with it). The sixteenth, 1035457030 (Strip of White Flesh, South Raya Lucaria
+    # Gate), moves Liurnia -> Raya Lucaria Academy and finds NO sweep host there, so it is left
+    # UNSWEPT. That is the containment design's stated honest outcome, not a lost check: the flag is
+    # still a check and still reachable, it is simply no longer paid by a boss kill.
+    # 2026-08-26 (#1066, J's Discord report): 4100 -> 4099, and again the -1 is a recorded DROP.
+    # Demi-Human Queen Marigga (2046400800) and the Jagged Peak Drake (2049410800) re-home to the
+    # regions they are FOUGHT in -- Cerulean and Jagged Peak, Alaric's in-game 2026-08-10 rulings,
+    # which now reach the sweep HOST derivation and not just the arena label. Their Gravesite
+    # members fall back into the Gravesite pool and are re-dealt to Gravesite's own hosts: measured
+    # in (trigger, flag) space, 65 removed / 64 added / 64 re-owned and ZERO region crossings.
+    # The one flag that leaves the corpus is 68750 (Mad Craftsman's Cookbook [1], near Divided
+    # Falls), and it leaves for a SEPARATE, scan-exact reason: it moves Gravesite -> Abyssal
+    # (item_play_regions volume 68600), and Abyssal's only sweep host is 28000800 on m28, which
+    # holds no m61 ground -- so there is no Abyssal trigger to deal it to. Same honest outcome as
+    # 1035457030 above: still a check, still reachable on foot, simply no longer paid by a kill.
+    # 2026-08-28 (#241): 4099 -> 4102. The 1.17 co-check audit adds the two real sibling checks on
+    # f14007850 (AP 7900286/7900287), hence +2 members with the same acquisition flag. The restored
+    # corroborated talk award f400020 adds the third member. Four existing flags merely re-own
+    # between the two tutorial triggers; none leaves its region.
+    # 2026-08-29 (#1096): 4102 -> 4105. The three verified Tarnished Pack field corpse pickups
+    # join their nearest same-region field-boss sweeps: Idus Sword -> Adan, Ritual Thrusting Shield
+    # -> Bell Bearing Hunter, and Reed Great Katana -> Putrid Avatar. No existing member moves.
+    # 2026-08-29 (#1111): 4105 -> 4104. The sole removal is dead ESD award f400020; its award
+    # branch requires f10009335, which has no setter/default in the complete input corpus.
+    # 2026-08-31 (#1100): 4104 -> 4105. The sole addition is Melina's post-Morgott Rold Medallion
+    # check f400001, attached only to Morgott trigger 11000800. Both golden post-Morgott seals read
+    # that acquisition flag; the exact relation is emitted as POST_BOSS_GIFTS and regression-tested.
+    # 2026-09-01 (#1303): 4105 -> 4104. Stormhawk Deenh (f10017900) moves from Stormveil to
+    # Liurnia because the Four Belfries sending gate is its only repeatable access route. It leaves
+    # Margit's Stormveil sweep (10000850); no other member enters, leaves, or changes owner.
+    # #1296: Senessax's shared reward flag now exposes both stone lots as checks; their ownership
+    # is represented across the applicable sweep rows, adding 12 (trigger, flag) pairs.
+    # #1437: remove the unused Poleblade copy from Wormface (1040520800).
+    # The live invasion flag400162 is intentionally not a Wormface sweep reward.
+    assert all(7774244 not in members for members in DUNGEON_SWEEPS.values())
+    # Native M4G dungeon admission adds only Silver Scarab to Stray Mimic Tear.
+    # 2026-09-08: 4128 -> 4122, two independent changes composed.
+    #  * world#1515/#1518 (main): FIVE flags lose sweep coverage and none gains -- 550050 (an
+    #    "About ..." tutorial popup) and the four unplaceable map-lot rows 1033457100, 1035477000,
+    #    1036437010, 1038447100. All five left the CORPUS, so nothing can sweep them; no surviving
+    #    check lost a host. 4128 -> 4123.
+    #  * #1514/#1509/#1511 (255's notebook, this branch): net -1. TWO checks lose every owner and
+    #    ONE gains one:
+    #      - f400221 (Erdsteel Dagger) moves Stormveil -> Limgrave on the ESD award site in the
+    #        m60_00 container, leaving Margit's Stormveil sweep (10000850) with no Limgrave field
+    #        boss eligible to host it. Same shape as the #1303 Stormhawk Deenh removal above.
+    #      - f2049427010 (Great Grave Glovewort) moves Jagged Peak -> Abyssal on nearest grace
+    #        76861, leaving the Jagged Peak Drake (2049410800) with no Abyssal host in range.
+    #      + f1049557700 (Larval Tear) leaves the HUB for Consecrated Snowfield, so it becomes
+    #        sweepable for the first time and joins Great Wyrm Theodorix (1050560800).
+    #    Everything else in that batch is a RE-OWNERSHIP, not a corpus change: 2051477500/510 to
+    #    Shadow Keep hosts, 2052417000 from Bayle to Midra (28000800), 2048417800 to 2046410800,
+    #    and the three Ancient Snow Valley Ruins rows off Theodorix onto Mountaintops bosses.
+    #    Those, plus the round-robin re-deal they caused, are pinned by the OWNERSHIP digest below.
+    #    4123 -> 4122.
+    # 2026-09-09 (#1513, merged onto the above): 4122 -> 4115. SEVEN removals, zero additions,
+    # zero re-ownership -- measured pairwise against origin/main, not inferred. The Ymir/Metyr
+    # questline rewards are now Hole-Laden-Necklace-gated (features/legacy_key_gates._YMIR_*), and
+    # neither Scadu Altus regional sweep trigger is behind the necklace, so both were a way past
+    # the new gate -- the #664 bypass exactly, through a different door, and the general property
+    # in test_no_sweep_grants_a_check_its_trigger_is_not_gated_behind is what caught it. Closed
+    # with two gen_data._SWEEP_EXCLUDED_FLAGS entries: 2049450800 (Ralva the Great Red Bear) sheds
+    # f400666 Cherishing Fingers, and 2051440800 (Rakshasa) sheds f400664 -- one flag, six co-check
+    # members (bell bearing, Maternal Staff, four High Priest pieces), hence 1 + 6 = 7. The
+    # exclusions are applied AFTER every construction and redistribution pass and the members
+    # deliberately do not re-home, so there is no round-robin collateral: nothing else moved.
+    #   🛑 The first entry was written against 2049440800 (Dryleaf Dane) on this branch. Main's
+    #   #1515/#1518 removals re-phased the Scadu Altus round-robin and dealt f400666 to Ralva
+    #   instead, so the trigger was RE-DERIVED BY FLAG IDENTITY from the regenerated corpus at
+    #   merge time. Both owners are Scadu Altus regional sweeps, so the ruling is unchanged.
+    # #1537: 4115 -> 4114. Exactly f400907 loses Smarag1034450800 when the
+    # merchant death drop joins his stock behind the Academy lock. It is an overworld
+    # pocket with no eligible same-region field boss, so hand collection remains; the
+    # old Liurnia sweep must not bypass that door. No other check loses coverage.
+    # #1543: +1 restored visage f2048467701; no existing member loses sweep eligibility.
+    # 2026-09-11 (255 Castle Ensis report, instrument adjudication): 4115 -> 4113. Seven region
+    # moves, five of which simply change owner (see the digest note below); exactly TWO checks lose
+    # sweep coverage outright and both for the same structural reason. f68790 (Loyal Knight's
+    # Cookbook) and f530865 (Moonrithyll's Knight Sword) move Gravesite -> Ensis, leaving the
+    # Ghostflame Dragon field sweep 2045440800 two tiles west; Ensis's own regional divvy is
+    # Rellana 2048440800, and the round-robin deals these two no slot. Hand collection remains,
+    # which is the conservative direction: a sweep that granted them from a Gravesite boss was
+    # granting an Ensis check off a Gravesite kill, which is what #1059 forbids.
+    # 2026-09-13 (Ace's Haligtree report): 4113 -> 4118. ADDED 5, removed 0. The five Ghost
+    # Glovewort [9] guaranteed ENEMY-DROP lots f15001300..15001340 (Elphael outer brace, "around
+    # Prayer Room") were method flag_prefix / map PENDING because the flag-prefix map recovery in
+    # gen_data.py never listed the "15" prefix, so they failed the interior-member gate while the
+    # neighbouring map lots f15001250..15001290 were already dealt to Loretta and Malenia. They now
+    # recover to m15_00 and join the same Haligtree round-robin. Nothing loses coverage.
+    # 2026-09-13 (the unswept-pickup pass, #1559 follow-up): 4118 -> 4124. ADDED 6, REMOVED 0.
+    # Three derivation repairs, each of which PUBLISHES a place the row's own flag already encoded:
+    #   * COARSE-LOD OVERWORLD COLUMNS. An overworld map id is m6[01]_XX_YY_LL and LL is the LOD
+    #     LEVEL: at LL=02, (XX,YY) indexes a 4x4 BLOCK of level-0 tiles, so m60_11_13_02 is the block
+    #     spanning tiles (44..47, 52..55), not "tile (11,13)". Six rows carry such a column and every
+    #     consumer read the first three fields as a tile name, filing them off the grid entirely.
+    #     `_overworld_member_tile` now decodes the exact tile from the flag's own 10XXYYLLLL encoding
+    #     and accepts it ONLY when it lies inside the block the column names (all six do; a flag that
+    #     decodes outside its block, or does not decode, is REFUSED rather than picked). ADDS
+    #     f1045527000 Gravity Stone Fan -> 1045520800 (Altus) and f1048557900 Flowing Curved Sword +
+    #     f1049547900 St. Trina's Torch -> 1248550800 (Consecrated Snowfield).
+    #   * OVERWORLD-NATIVE M4G PINS. The native-pin clause admitted dungeon maps only, written before
+    #     the overworld-tile branch existed. ADDS f1038457500 Briars of Sin -> 1039440800 (Liurnia),
+    #     admitted only because its map column (m60_38_45_00) and its flag independently name the
+    #     same tile.
+    #   * FLAG-PREFIX PREFIXES "22"/"28" -- the f15001300..15001340 defect one DLC interior further
+    #     out. ADDS f22007910 Smithing Stone [8] -> 22000800 (Cerulean, map-local) and f28007900
+    #     Revered Spirit Ash -> 28000800 (Abyssal, map-local). In both maps every OTHER flag_prefix
+    #     row already carried its map from the lot scan; only these guaranteed ENEMY-DROP lots, which
+    #     have no lot row to carry it, stayed PENDING.
+    # Nothing loses coverage. The three RE-OWNERSHIPS the LOD decode causes are at the digest below.
+    # ALARIC'S RULING, 2026-09-13, layered on the same pass: 4124 -> 4134, ADDED 10 more, REMOVED 0.
+    # The nine `_SWEEP_EXCLUDED_FLAGS[34110800]` Carian-Inverted-Statue flags (f34117100/110/120,
+    # f34117400..403, f34117500, f34117710 -- ten checks, f34117500 carries a co-check) leave that
+    # exclusion. The gate reading was never wrong; the ALTERNATIVE was. 34110800 is cut content
+    # (contract._RUNTIME_SWEEP_SKIP_REASONS, #1530), so "excluded here, paid by its own map's boss
+    # instead" was never available to them and they were simply unpayable. Backdoor reachability wins.
+    # 🛑 The trigger is NOT un-skipped -- that would hand a sweep to a fight nobody can start. m34_11
+    # gets a curated overworld TILE ANCHOR (`_SWEEP_MAP_TILE_ANCHOR`, m60_38_46, joined out of
+    # grace_ground.tsv's seam onto play region 6200004 and item_play_regions.tsv's tile for it) and its
+    # whole membership re-homes through the ordinary field-neighbourhood pass, the same road the
+    # _SWEEP_UNSPAWNED bosses' members take. 34110800's own group empties and the trigger count drops
+    # 208 -> 207, which is the honest state for a boss that does not exist.
+    # 2026-09-22 (player report, log-traced): 4134 -> 4135. ADDED 1: f510800 Grafted Blade
+    # Greatsword joins trigger 1043300800 (Leonine Misbegotten, Weeping), its own vanilla drop.
+    # boss_reward_lots.py's scripted common-event family (handler 1100/1200) is invisible to
+    # #907's own-drop admission -- that pass reads boss_drops.py's NpcParam-derived
+    # BOSS_DROP_ENTITY only, and this drop is a map-lot award off a shared common event, not an
+    # NpcParam drop table. Its vanilla chain (m60_43_30 event 1043302800, a Restart-type event
+    # whose first instruction is `EndIf(EventFlag(1043300800))`) is exactly the CharacterDead
+    # race #907 already exists to route around, just via a common event instead of a raw
+    # CharacterHPValue wait: once 1043300800 becomes true through any path other than this one
+    # thread completing under its own steam, the guard trips early and 9180/510800 are stranded
+    # for good. A new hand-curated table, `_SWEEP_BOSS_REWARD_LOT_GIFTS` in gen_data.py (same
+    # fail-closed assertions as `_SWEEP_POST_BOSS_GIFTS` beside it), admits it the same way.
+    # 2026-09-25 (#1522), measured by (trigger, flag) against HEAD~1: 4135 -> 4131. REMOVED 4,
+    # ADDED 0, RE-OWNED 0: f39207170 Sacred Tear left trigger 39200800 (Magma Wyrm Makar);
+    # f1042377100 Assassin's Crimson Dagger and f1042377110 Storm Stomp left 1042370800
+    # (Crucible Knight, Gatefront); f1044357050 Flame Sling left 1044350800 (Darriwil). All four
+    # are phantom map lots (no MSB, no coordinate, no award route; the real items are awarded
+    # elsewhere) retired via greenfield/tombstones.tsv, so no surviving member's ap id moved.
+    assert total == 4131, (
+        "sweep corpus is %d, expected 4131. If a sweep was legitimately added or removed, say WHY "
+        "here -- do not just re-baseline the number." % total)
+
+
+def _sweep_digest():
+    """A stable fingerprint of WHICH BOSS OWNS WHICH CHECK -- keyed on the acquisition FLAG.
+
+    🛑 NEVER on the ap id. Positional ap ids renumber whenever a location is added or removed
+    earlier in the table, so an ap-keyed digest would fire on every unrelated change and be switched
+    off inside a month. The flag is the invariant."""
+    from worlds.eldenring.tables.data import LOCATIONS
+    flag_of = {ap: fl for _r, v in LOCATIONS.items() for (_n, ap, fl) in v}
+    pairs = sorted((int(trig), int(flag_of[m])) for trig, ms in DUNGEON_SWEEPS.items()
+                   for m in ms if m in flag_of)
+    return hashlib.sha256(repr(pairs).encode()).hexdigest()[:16], len(pairs)
+
+
+def test_the_sweep_OWNERSHIP_did_not_churn():
+    """The companion to the total above, and the reason it needs one.
+
+    2026-08-07: the corpus total moved 3688 -> 3691 while **133 members changed which boss grants
+    them** -- 21010800 <-> 21010801 swapping 16 and 15 (the two Shadow Keep bosses trading half their
+    lists), plus overworld 3-cycles 1042550800 -> 1043530800 -> 1041530800, four members each. The
+    multi-boss divvy's PHASE depends on the member list's length, so inserting members re-phases
+    everything after them (#363's stable-modulus problem). Bumping the total went green through all
+    of it; the churn was found only because someone diffed by hand.
+
+    That churn was ACCEPTED on a measurement, not a shrug: of the 133, **ZERO crossed a region
+    boundary**. Every one stayed with a boss in the same region, so no check moved somewhere a
+    player might not have access to -- the softlock-shaped risk (#445) is not present.
+
+    2026-08-08 (the Shop umbrella fix): digest a50f6de2 -> a8d14d12, n 3691 -> 3685. Six REMOVED,
+    zero added, zero RE-OWNED -- the cleanest shape this diff can have. All six are Preceptor
+    Seluvis shop rows leaving dungeon trigger 1034500800; see the sibling test's docstring for why
+    they were ever in it. No re-phasing followed, because removing the TAIL of one member list
+    cannot shift a modulus that no other sweep shares.
+
+    2026-08-08 (phase-2 heads are not defeat flags, #481): digest a8d14d12 -> 3a3b9d44, n 3685 ->
+    3685. **408 RE-OWNED, zero net added, zero net removed, and ZERO crossed a region boundary** --
+    the safe shape this docstring asks for. Six triggers were dropped (12020801, 13000801, 14000801,
+    16000801, 20010801, 21010801: the second health-bar head of a fight whose flag sets when that
+    bar appears, not when the boss dies), so their members return to the fight's own primary and the
+    per-map divvy re-phases around them. The re-phase is why 24 triggers appear in the removed set
+    and 19 in the added set for a change that drops six: the modulus moved, exactly as #363 warned.
+    Two neighbours (12080800, 12090800) gained one member each for the same reason.
+
+    2026-08-08 (the second boss reward mechanism, STACKED ON #481): n 3685 -> 3677. 8 removed, 0 added, **60
+    RE-OWNED with zero region crossings** -- the largest re-ownership churn this pin has recorded,
+    and it is benign for the reason the 2026-08-07 entry established: the divvy's phase depends on
+    member-list length, so growing a map's pool re-phases the rest. Checked the way this docstring
+    says to, per-check on both sides of SWEEP_REGION. The digest is re-derived on THIS base rather
+    than carried over from the pre-#481 measurement -- two ownership changes compose, and a digest
+    copied across a rebase would be a number nobody measured.
+
+
+    2026-08-09 (#495, the bossless-map remainder pool): n 3677 -> 3726. ADDED 52, REMOVED 3,
+    RE-OWNED 3. The three removed ARE the three re-owned -- 21027050, 21027230, 21027250 changed
+    trigger as the Shadow Keep divvy modulus re-phased around a pool that grew from 5 to 41. Checked
+    the way this docstring says to: SWEEP_REGION is 'Shadow Keep' for both the old and the new owner
+    of all three, so they stayed inside their region. Added by region: Shadow Keep 39, Siofra River
+    13.
+
+    2026-08-09 (TILE_ROW_REGION, the graceless-tile regioning fix): n 3726 -> 3732. ADDED 6,
+    REMOVED 0, RE-OWNED 53 -- and ZERO of the 53 changed the REGION of their sweep, checked the way
+    this docstring says to, per-check on both sides of SWEEP_REGION. The re-ownership is the divvy
+    re-phasing again: two regions changed size (Cerulean 50 -> 43 checks, Charo's 20 -> 27; Gravesite
+    161 -> 152 members, Rauh Base 67 -> 76), so the modulus moved under the members that stayed. All
+    six ADDED are in Charo's, which gained a second trigger along with the checks. The thirteen
+    Gravesite -> Rauh Base checks appear in NONE of the three sets: their trigger 2046450800 moved
+    region with them, so nothing was re-owned -- which is the same fact as #445 losing one of its six
+    mismatched groups.
+
+    WHEN THIS FAILS: diff DUNGEON_SWEEPS by (trigger, flag) across the regen and record ADDED,
+    REMOVED and RE-OWNED separately. For the re-owned, check SWEEP_REGION on both sides: staying
+    inside one region is a pacing change, leaving it is a reachability bug.
+
+    2026-08-10 (#528, the Cerulean merge): digest 1652af0d -> b680bd65, n 3732 -> 3732. ADDED 0,
+    REMOVED 0, **12 RE-OWNED**. A pure permutation -- exactly what this gate exists for, since the
+    total cannot see one -- and I DID NOT UPDATE THIS PIN, so main ran red from that merge until
+    now. Cause: Charo's and Stone Coffin folded into Cerulean, and sweep members are filtered to
+    their sweep's region, so a check whose region moves re-homes to a boss in the new region.
+    Dancer of Ranah -> Death Rite Bird 7, Ghostflame Dragon -> Death Rite Bird 3, and 2 back.
+    All 12 stayed INSIDE their region pair, so this is the pacing shape, not the reachability one.
+
+    2026-08-10 (#532, the boss-region verdicts): digest b680bd65 -> bd5147a4, n 3732 -> 3732.
+    ADDED 0, REMOVED 0, **172 RE-OWNED**. Same mechanism, larger input: six in-game rulings moved
+    68 checks across 14 tiles into another region (Tree Sentinel -> Shadow Keep, Dancing Lion ->
+    Ancient Ruins, plus Jagged Peak Drake, Godefroy, Jori, Marigga) and each took its sweep
+    membership with it. Romina -> Dancing Lion 30, Dancing Lion -> Rugalea 13, Ralva -> Tree
+    Sentinel 12. NOTHING entered or left the swept corpus -- only who grants what changed, which
+    is the shape this digest was added to make visible.
+
+    2026-08-10 (#532 again, the straddle resolution): digest bd5147a4 -> 0f647980, n 3732 -> 3732.
+    The verdicts split nine graces at region boundaries (53 -> 59 straddles, pin 55), so the nine
+    were resolved to their MAJORITY side -- 20 checks, see issue #534 -- which moved ownership a
+    third time. Straddles land at 51 and minority at 4.23%, both under the limits and better than
+    main. Still ADDED 0 / REMOVED 0: every movement today has been a permutation.
+
+    2026-08-10 (#540, the unspawned Fallingstar Beast): digest 0f647980 -> ebbf592b, n 3732 ->
+    3732. **ADDED 0, REMOVED 0, 23 RE-OWNED, ZERO region crossings** -- the pacing shape, again,
+    and this time by construction. Trigger 1038540800 ("Fallingstar Beast", m60_38_54, Mt. Gelmir)
+    is EMEVD-only: a complete boss script for a character the MSB never places, so its defeat flag
+    can never be set and its 23 members -- 10.4% of Mt. Gelmir's 222 checks -- hung off a trigger
+    that cannot fire. Alaric warped to First Mt. Gelmir Campsite (grace 76351) on 2026-08-10 and
+    there is no beast. Dropping the trigger hands its tile's filler back to the FIELD NEIGHBOURHOOD
+    pass, which re-homed all 23 inside Mt. Gelmir: 12 to 1037540810 (Ulcerated Tree Spirit,
+    m60_37_54) and 11 to 1037530800 (Demi-Human Queen Maggie, m60_37_53). Trigger count 219 -> 218.
+    Checked the way this docstring says to, per-check on both sides of SWEEP_REGION: all 23 read
+    'Mt. Gelmir' before and after.
+
+    2026-08-11 (#556, m10_00 -> Stormveil): digest ebbf592b -> 7ed70eb4, n 3732 -> 3731. ADDED 0,
+    REMOVED 1, **3 RE-OWNED, ZERO region crossings**. The removal is explained in full on the total
+    above (region_of's map side effect, not a region move). The three re-owned are the pacing shape
+    and nothing else: 7771013 and 7773852 went 10000800 -> 10000850 and 7774034 went the other way,
+    all six endpoints SWEEP_REGION 'Stormveil'. Both triggers are Stormveil majors on m10_00, so
+    losing one member from a 111-check pool re-phased the two-way round-robin by one -- the #363
+    stable-modulus effect this docstring already records twice, at its smallest possible size.
+
+    2026-08-13 (#191, co-check siblings inherit their primary's sweep): digest 3c4273a8 -> 328ce8d0,
+    n 3876 -> 4045. **ADDED only**, +169, and every addition is a COCHECK-band ap_id sitting in the
+    same (trigger, flag) group as its primary -- no existing member changed owner. That is the shape
+    to verify if this moves again: a mirror can only add beside a primary, so an addition anywhere
+    else, or any REMOVAL, is a different bug wearing this number.
+
+    2026-08-13 (the per-seed surface cut): digest 7ed70eb4 -> 3c4273a8, n 3731 -> 3876. **ADDED
+    145, REMOVED 0, 774 RE-OWNED, ZERO region crossings.** By far the largest re-ownership this pin
+    has recorded, and it is entirely the stable-modulus effect at full size: the region divvy deals
+    a region's pool round-robin over `_ents[_j % len(_ents)]`, so inserting even one member near the
+    head of a sorted pool re-phases every member after it. Siofra River 128, Haligtree 106,
+    Leyndell 97, Farum Azula 87. Checked the way this docstring says to, per-check on both sides of
+    SWEEP_REGION: all 774 read the same region before and after, so not one check changed hands
+    across a region boundary -- the pacing moved, the geography did not.
+    🛑 A churn this size is exactly when to distrust the total: 145 added and 3876 - 3731 = 145 agree
+    only because REMOVED is 0, and the digest is what proves that rather than 900 in and 755 out.
+
+    2026-08-13 (76916 Castle Watering Hole reversed to Scadu Altus, #645): digest 328ce8d0 ->
+    d049e865, n 4045 -> 4045. **ADDED 0, REMOVED 0, 59 RE-OWNED -- and 24 of them DID cross a region
+    boundary.**
+
+    🛑 THE FIRST ENTRY HERE WITH REGION CROSSINGS, and they are the change rather than a side effect:
+    the 24 are exactly the Castle Watering Hole checks moving Shadow Keep -> Scadu Altus, which is
+    what #645 is. Every previous paragraph could say "zero crossings" because it was re-phasing;
+    this one cannot, and saying so is the point of the pin. The check to make when it moves again is
+    unchanged -- ask WHICH checks crossed and whether their crossing was the intent.
+
+    The other 35 are ordinary re-phasing on both sides of the move (30 now in Scadu Altus, 29 in
+    Shadow Keep): taking 24 members out of one region's round-robin pool and putting them in
+    another re-phases `_ents[_j % len(_ents)]` for both, the same stable-modulus effect as the
+    paragraph above. Zero added and zero removed is what proves it is a permutation and not a
+    silent 24-in/24-out."""
+    digest, n = _sweep_digest()
+    # 2026-08-14: d049e865 -> 28f04fe4, count UNCHANGED at 4045. Pure membership movement, and it is
+    # the #680 fix: flag 66930 (Hefty Cracked Pot, lot m41_01 Bonny Gaol) moved Limgrave -> Scadu
+    # Altus, so one member left Limgrave's sweep and joined Scadu Altus's. A churn with the SAME
+    # total is exactly what a one-check re-region looks like; a real regression would move the count.
+    # 2026-08-16 (#737): 28f04fe4 -> 03b7fb99, count 4045 -> 4044. The count moving is the tell that
+    # this one is NOT a permutation, and it should not be: flag 60510 LEFT the corpus because it
+    # became Margit's reward instead of his filler (see the +/- note in the corpus test above). The
+    # rest of the digest change is m10_00's two triggers re-partitioning 111 members where they had
+    # 112 -- the DIVVIED path re-phases both sides whenever the pool size moves.
+    # 2026-08-17 (#653): 03b7fb99 -> 1755ba16, count 4044 -> 4034. REMOVED only: the ten
+    # Carian-Inverted-Statue checks named in the corpus ratchet above left ordinary-layout trigger
+    # 34110800. No member was added or re-owned, so this is the narrow gate-bypass correction.
+    # 2026-08-17 (#664): 1755ba16 -> 1f01b69f, 4034 -> 4033. REMOVED only: Rhia bell reward
+    # 2053467600 left Rakshasa's sweep. No member was added or re-owned.
+    # 2026-08-17 (#665): 1f01b69f -> 79ccf39c, 4033 -> 4032. REMOVED only: Dheo bell reward
+    # 2050407000 left Bayle's sweep when both bell interactions became KeyItem checks.
+    # 2026-08-18 (#562): 79ccf39c -> 394aa604, 4032 -> 4121. ADDED 59 physical flags and 30
+    # co-check siblings, REMOVED 0, RE-OWNED 45; zero additions or re-ownerships cross a region.
+    # This is the intended recovery of checks whose MSB-derived map was known but not recorded.
+    # 2026-08-19 (#330): 394aa604 -> 3ca932cb, 4121 -> 3997. The 124 worldless Rada Fruit rows left
+    # (gen_data._RADA_WORLDLESS; the corpus ratchet above carries the WHY). Measured by
+    # (trigger, flag) in flag-pair space: 644 removed / 519 added / 522 re-owned -- large because
+    # the 124 sat in MANY divvy pools (legacy map-local, region round-robin, AND m61 field slices),
+    # and every pool that shrinks re-phases `_ents[_j % len(_ents)]` for its whole membership
+    # (#363's stable-modulus effect, at its widest observed). Every removed pair's flag is in the
+    # exclusion set; exactly ONE re-own crosses a region boundary and in the SAFE direction --
+    # f21027991 (m21_02, Shadow Keep ground) moved from m61 trigger 2050470800 onto the Golden
+    # Hippopotamus, i.e. INTO its own region's map-local sweep.
+    # 2026-08-19 (#885, rebased after #330): 3ca932cb -> f3b8f3f3, count UNCHANGED at 3997.
+    # Measured in (trigger, flag) multiset space: 28 removed / 28 added, with 25 flags changing
+    # owner. The churn itself moves no flag between differently-labelled owner regions. Separately,
+    # the Hippo sweep's region label changes Shadow Keep -> Scadu Altus, and all 58 members it now
+    # owns are Scadu Altus checks -- the intended arena-region ruling, not a cross-region grant.
+    # 2026-08-19 (full-census regen): f3b8f3f3 -> 606018dc, 3997 -> 4103. The corpus ratchet above
+    # carries the measurement; the one region-crossing re-own (f2047457180) follows its check's own
+    # region correction, the safe direction.
+    # 2026-08-19 (census + cull on top of #896's 89fbf395/3997): -> a57ff5e1/4018. Measurement at
+    # the corpus ratchet above; zero region-crossing re-owns.
+    # 2026-08-21 (#940): 7883452acaa19d1f/4100 -> 1489c9c542f81b0a/4101. The +1 member is the
+    # un-culled Four Belfries key (f1033477020 -> Royal Revenant 1034480800); the other 148
+    # re-owns are the tie-split round-robin re-dealing distance-tied checks, and ZERO cross a
+    # region boundary (measured pair-by-pair against SWEEP_REGION).
+    # 2026-08-24 (#987): 1489c9c542f81b0a -> 991951420a8525a4, count UNCHANGED at 4101. The
+    # narrowest shape this pin can record that is not a no-op: TWO TRIGGERS WERE RENUMBERED and
+    # nothing else moved. Dryleaf Dane's sweeps keyed on his ENTITY ids (2049440710/2050430710),
+    # which no EMEVD sets as a flag, and now key on his EMEVD-derived DEFEAT flags
+    # (2049440800/2050430800). Measured in (trigger, flag) space: 41 removed / 41 added / 41
+    # re-owned, and the removed and added sets are the SAME 41 flags -- every member kept its
+    # owner, the owner's number changed. ZERO region crossings (both triggers stay Scadu Altus on
+    # both sides). No divvy re-phase: a key rename cannot move `_ents[_j % len(_ents)]`.
+    # 2026-08-26 (#1059): 991951420a8525a4 -> bc5e71949dacb1c9, count UNCHANGED at 4101. A legacy
+    # boss's HOST region now ranks BOSS_AREA_REGION (the measured PlayRegionParam arena) above
+    # `_m61_boss_region` (the nearest-neighbour tile decode that also regions the CHECKS), so a
+    # boss can no longer inherit its members' region by construction. Measured in (trigger, flag)
+    # space: 34 removed / 34 added / 32 re-owned, ZERO flags lost an owner, and ZERO re-owns cross
+    # a sweep-region boundary (checked pair-by-pair against SWEEP_REGION on both sides).
+    # The motivating case is NovahDango's: five Abyssal checks read "also granted by Jori, Elder
+    # Inquisitor" while Jori is fought in Scadu Altus. They did not become unswept -- Jori became a
+    # Scadu Altus host and Midra, Lord of Frenzied Flame (Abyssal's own major) took the five. That
+    # is why the count holds at 4101: this is a re-HOST, not a drop. Applying the constraint at the
+    # host derivation rather than as a late member filter is what makes that true; a late filter
+    # would have stripped them after the divvy was dealt.
+    # 2026-08-26 (#1054/#1046): bc5e71949dacb1c9/4101 -> 5d5de2223034adf6/4100. Diffed the way the
+    # docstring demands, in (trigger, flag) space: REMOVED 29, ADDED 28, RE-OWNED 28. FIFTEEN of the
+    # re-owns change the sweep's REGION, and here that is the CORRECT reading rather than the
+    # reachability bug this gate normally hunts -- the CHECK moved region first (the scan
+    # adjudication above), and a member always re-homes to a trigger in the region it now lives in.
+    # Named, so a future regen can tell this shape from the bug: 2052407010/2052417010/2050437010/
+    # 2050437040 -> Abyssal, 2048417000/2048417010/2048417700/2049427000 -> Gravesite,
+    # 2046407040/2046407050/2046407060/2047417110 -> Cerulean, 1035457000/1035457100 -> Raya Lucaria
+    # Academy, 1047517000 -> Mountaintops. ZERO flags gained an owner; ONE lost one (1035457030,
+    # see the corpus pin above -- no Academy host exists for it).
+    # 🛑 The Mt. Gelmir trio (1039537040/50/60) is WITHHELD from this batch, not applied: it would
+    # take three of the twenty-three checks test_gf_unspawned_field_boss pins to Mt. Gelmir. See the
+    # note in gen_data.FLAG_REGION_OVERRIDE.
+    # 2026-08-26 (#1013, Enia vanilla): 5d5de2223034adf6 -> bd4c7e5d5b89c0f1, count UNCHANGED at
+    # 4100. Enia's hundred hub rows left the corpus (gen_data `enia_vanilla`), and NO Enia row was
+    # sweep-owned -- the OWNED FLAG SET is untouched at 3897, zero lost, zero gained. The whole churn
+    # is the divvy re-phase: the hub rows sat inside region round-robin pools, so removing 100
+    # members re-deals `_ents[_j % len(_ents)]` for every pool that held them. Measured in
+    # (trigger, flag) space against main: 195 removed / 195 added / 196 re-owned, and ZERO region
+    # crossings, checked pair-by-pair against SWEEP_REGION on both sides.
+    # 🛑 The same removal shifts every LATER ap id down by exactly 100, which is why GOSTOC_BELL_AP
+    # at the top of this file moves 7773804 -> 7773706. Re-read from the regenerated data.py, not
+    # arithmetic: f400051 is ap 7773704 there.
+    # 2026-08-26 (#1066): bd4c7e5d5b89c0f1/4100 -> b30cddc2f9d07205/4099. The #1059 shape a second
+    # time, on the two triggers J reported: a HUMAN ARENA RULING now outranks the tile decode in the
+    # sweep host derivation too, so Marigga hosts Cerulean's divvy and the Jagged Peak Drake hosts
+    # Jagged Peak's instead of both hosting Gravesite's. Diffed as the docstring demands, in
+    # (trigger, flag) space: REMOVED 65, ADDED 64, RE-OWNED 64, and ZERO region crossings -- which
+    # is the whole point of re-homing at the host derivation rather than filtering members later.
+    # ONE flag loses its owner and it is not one of theirs: 68750 moves Gravesite -> Abyssal on the
+    # scan (volume 68600) and Abyssal has no host that reaches m61 ground. See the corpus pin above.
+    # 2026-08-28 (#241): b30cddc2f9d07205/4099 -> 22eeed5e112d8b71/4102. Pairwise by
+    # (trigger, flag): removed 4, added 6. New flags are f400020 and f14007850 (the latter occurs
+    # twice because two independently randomized sibling checks share it); f400051, f400221,
+    # f10007082 and f10017900 only swap between tutorial triggers, with zero region crossings.
+    # 2026-08-29 (#1096): 22eeed5e112d8b71/4102 -> 7e13e38125507866/4105. Exactly three pairs
+    # were added: (1038410800, f1038417020), (1048410800, f1047427000), and
+    # (1051400800, f1050407000). Zero pairs were removed or re-owned.
+    # 2026-08-29 (#1111): 7e13e38125507866/4105 -> a1b74b51eb1f69da/4104. Pairwise against the
+    # freshly regenerated 125cb747 corpus: 188 removed / 187 added / 187 flags re-owned. Exactly
+    # one flag leaves the owned set (f400020), none enters it, and ZERO re-owns cross a region.
+    # The otherwise-large churn is the documented positional-id deletion / round-robin re-phase.
+    # 2026-08-29 (#1075): a1b74b51eb1f69da/4104 -> 28555aa6e1d28273/4104. Exactly two pairs
+    # were removed and two added: f1047517010 and f1047517300 move from Altus trigger 1045520800
+    # to Mountaintops trigger 1048510800 with their corrected check region. No flag gained or lost
+    # an owner; these are the two intended region crossings and no others.
+    # 2026-08-29 (#1076): 28555aa6e1d28273/4104 -> 08d4874c16980e64/4104. Pairwise against main:
+    # 24 removed / 24 added / 24 flags re-owned, with none lost or gained. Nineteen are the normal
+    # round-robin re-phase and stay within one region. The other five are exactly the Campsite flags
+    # f1038537000/10/30/40/50 moving Altus -> Mt. Gelmir with their corrected check region. The six
+    # Seethewater pickup flags already belonged to trigger 1038520800; that trigger itself is now
+    # correctly labelled Mt. Gelmir, so no pair change is needed for them.
+    # 2026-08-29 (#1077): 08d4874c16980e64/4104 -> 120a07dbe4af5fac/4104. The five worldless
+    # Shaded Castle rows were not sweep-owned, so the owned flag set and count are unchanged.
+    # Removing their positional AP ids re-phases later round-robin pools: 148 removed / 148 added /
+    # 148 flags re-owned, with none lost or gained and ZERO region crossings.
+    # 2026-08-30 (#1164): 120a07dbe4af5fac -> 97c4e4ce676f2093, count UNCHANGED at 4104.
+    # Pairwise in (trigger, flag) space: 36 removed / 36 added / the same 36 flags re-owned;
+    # none gained or lost an owner and ZERO cross a region boundary (every endpoint is Altus).
+    # f530300 moves from the non-terminal Coffin apparition 1037510800 to Lansseax's real final
+    # Rampartside kill 1041520800. Suppressing the old field host and inserting the new one
+    # re-deals the surrounding Altus nearest-boss partitions, producing the other 35 moves.
+    # 2026-08-31 (#1100): 97c4e4ce676f2093/4104 -> 974e85fbb772c977/4105. Pairwise against main:
+    # exactly one addition, (Morgott trigger 11000800, Rold gift flag 400001); zero removals and
+    # zero re-ownership. The relation is intentionally exact and cannot absorb another key item.
+    # 2026-08-31 (#1054): 974e85fbb772c977 -> 9259758b28cca647, count unchanged at 4105.
+    # f68630 moved Scadu Altus -> Gravesite on exact ground evidence, so its owner moves from
+    # Black Knight Edredd (2049430850) to Gravesite's Ghostflame Dragon (2045440800). Inserting it
+    # into that region's round-robin rephases 11 further flags between the two Gravesite triggers
+    # 2045440800/2046410800: 12 removals, 12 additions, zero unowned flags and zero region crossings.
+    # 2026-08-31 (#1054, Castle Ensis rune): 9259758b28cca647 -> f450cab3f833dcb1, count
+    # unchanged at 4105. Exactly one pair was removed and one added: f2047447620 moves from
+    # Gravesite's Ghostflame Dragon (2045440800) to Scadu Altus trigger 2047450800 with its
+    # corrected check region. No flag gained or lost an owner; this is the single intended
+    # region crossing and there is no round-robin collateral churn.
+    # 2026-09-01 (#1303): f450cab3f833dcb1/4105 -> 78fe87536fe461c9/4104. Pairwise against main,
+    # exactly (10000850, f10017900) was removed. There are zero additions and zero re-ownerships;
+    # the check is deliberately unswept because Liurnia has no eligible host for this interior.
+    # #1437: five M4G recoveries add [(2046410800, 2046407001), (2046410800, 2046407002), (2046410800, 2046407003), (2046410800, 2046407004), (2048440800, 2047447901)]; zero removals.
+    # Seven Somber recoveries add exactly (trigger, acquisition flag):
+    # (1049370850, 540424), (1051430800, 540428), (2045440800, 530861),
+    # (2046450800, 540912), (2046450800, 540914), (2048440800, 540920),
+    # (2048440800, 540922). Zero removals or re-ownership relative to the NPC base.
+    # Exactly (30200800, 30207900) added; no removals or re-ownership.
+    # 2026-09-08: 10e98be68f92e19f/4128 -> ee2392e1c3d8ebfd/4122, two changes composed.
+    #  * world#1515/#1518 (main): ten rows left the corpus, five of them sweep members, and the
+    #    round-robin `_ents[_j % len(_ents)]` re-deal reshuffled every pool that held them.
+    #    Measured pairwise in (trigger, flag) space: 324 flags re-owned, ZERO region crossings,
+    #    ZERO check-region changes, exactly five flags lost coverage and ZERO gained.
+    #  * #1514/#1509/#1511 (this branch): TWO checks lose every owner (f400221 -> Limgrave,
+    #    f2049427010 -> Abyssal; see the corpus assertion for why neither region has an eligible
+    #    host), ONE gains its first (f1049557700 leaves the HUB and joins Theodorix 1050560800),
+    #    and 34 are RE-OWNED. Six of those 34 are the region moves themselves: 2051477500/
+    #    2051477510 leave the Scadu Altus trigger 2049450800 for Shadow Keep hosts, 2052417000
+    #    leaves Bayle (2054390800) for Midra (28000800), 2048417800 leaves the Jagged Peak Drake
+    #    for 2046410800, and 580330 / 1051557310 / 1051557320 leave Theodorix for Mountaintops
+    #    bosses (1050570800, 1051570800, 1053560800) -- the #1059 containment pin in
+    #    gen_data._FIELD_SWEEP_REGION_CURATED doing its job, since Theodorix's arena is
+    #    Consecrated Snowfield. The remaining 28 are ROUND-ROBIN COLLATERAL, not decisions.
+    # 2026-09-09 (#1513, merged onto the above): ee2392e1c3d8ebfd/4122 -> c6fba3bc346eb880/4115.
+    # Diffed in (trigger, flag) space against origin/main, as this docstring demands: removed
+    # exactly {(2049450800, 400666): 1, (2051440800, 400664): 6}, added {}, re-owned nothing, and
+    # ZERO crossed a region boundary (nothing moved at all). Both removals are the necklace-gate
+    # bypass closed in gen_data._SWEEP_EXCLUDED_FLAGS -- see the sibling total's note above,
+    # including why the first trigger is Ralva (2049450800) and not the Dryleaf Dane number this
+    # branch originally wrote. The seven is 1 + 6 because f400664 is one acquisition flag with six
+    # co-check members.
+    # 2026-09-09 (#1529, the cut-content sweep triggers): c6fba3bc346eb880 -> 5ff5eda14a9cc253,
+    # count UNCHANGED at 4115. 1041330800 (Fourth Church of Marika) is now an 'unspawned' verdict
+    # -- its EMEVD boss chain is never $InitializeEvent'd from the map constructor -- so gen_data
+    # drops its trigger and re-homes its members. Diffed in (trigger, flag) space against
+    # origin/main, as this docstring demands: 13 removed / 13 added / the same 13 flags re-owned,
+    # ZERO flags lost an owner, ZERO gained one, and ZERO crossed a region boundary. Ten of the 13
+    # are 1041330800's own members moving to the Weeping Peninsula's other field bosses (mostly
+    # 1042330800); the other three are the round-robin `_ents[_j % len(_ents)]` re-deal between
+    # 1042330800 and 1043330800 that inserting them causes -- collateral, not decisions.
+    # The other four cut triggers keep their groups in the BAKED table on purpose: they are
+    # filtered at RUNTIME by contract._RUNTIME_SWEEP_SKIP_REASONS, which leaves this digest alone.
+    # #1537: measured against 67324bcc in (trigger, flag) space. Remove
+    # (1034450800,400907):1 with no replacement (Academy pocket; see total above).
+    # Re-home (1038520800,1039537040):1 -> (1040530800,1039537040):1;
+    # (1038520800,1039537050):2 -> (1039540800,1039537050):2;
+    # (1038520800,1039537060):1 -> (1040520800,1039537060):1.
+    # These are precisely the three measured Altus flags, four AP siblings. No collateral churn.
+    # #1543, measured by (trigger, flag): +1 f2048467701, zero lost; 25 re-owned.
+    # Three visage checks follow their corrected regions (f2045467500 Rauh Base -> Ancient Ruins;
+    # f2050467500/7510 Shadow Keep -> Scadu Altus). The other 22 remain in Shadow Keep;
+    # removing those two members re-phases its remainder divvy. f65410 retains its old owner.
+    # #1538 on top of that (2026-09-11 merge): the MFG region pass re-owns ten corrected checks
+    # (six Abyssal rewards -> Midra 28000800, Sacred Blade -> 1045390800, Greathammer ->
+    # 2046410800, two Furnace Visages already Scadu Altus via #1543) with no flag gaining or
+    # losing coverage; the count stays 4115.
+    # 2026-09-11 (255 Castle Ensis report), measured by (trigger, flag): 7 removed, 5 added, net -2.
+    # ZERO crossed a region boundary -- every new owner is fought in its member's NEW region, which
+    # is the shape #1059 demands. Four checks leave the Ghostflame Dragon field sweep 2045440800
+    # (Gravesite) as they move to Ensis, and three of them are dealt to Rellana 2048440800:
+    # f2047447730 Starlight Shards, f2047447820 Carian Sorcery Sword, f2047457180 Grave Glovewort
+    # [8]. Two leave Rellana as they move to Scadu Altus: f2048447080 -> Black Knight Garrew
+    # 2047450800, f2048447500 -> Black Knight Edredd 2049430850. The remaining two (f68790,
+    # f530865) lose coverage and are accounted for at the corpus total above.
+    # 2026-09-12: exactly 16 member links move from the three Avatar proxies to
+    # 2050480800. The owned acquisition flags and every unrelated owner are unchanged.
+    # 2026-09-13 (Ace's Haligtree report), measured by (trigger, flag) against origin/main
+    # ecef615f: digest 132220155d8778d3 -> 830d4ccff488de1f, n 4113 -> 4118. ADDED 5 (the five
+    # f15001300..15001340 Ghost Glovewort [9] enemy drops: three dealt to Malenia 15000800, two to
+    # Loretta 15000850), REMOVED 0, RE-OWNED 99 -- and every one of the 99 is a Haligtree map lot
+    # trading between Malenia and Loretta (50 one way, 49 the other) as the round-robin re-phased
+    # around the five insertions, the #363 modulus shape. ZERO crossed a region boundary:
+    # SWEEP_REGION is 'Haligtree' for both owners of all 99.
+    # 2026-09-13 (the unswept-pickup pass), measured by (trigger, flag) against origin/main ed90bd50:
+    # digest 830d4ccff488de1f -> 988c8ffdc0bda9fd, n 4118 -> 4124. ADDED 6 (the six named at the
+    # corpus total above), REMOVED 0, RE-OWNED 3 -- and all three are the coarse-LOD decode CORRECTING
+    # a mis-file, which is the point of it. f1042377060 Flail and f1042397010 Lance left 18000800 and
+    # f1042377070 Lordsworn's Greatsword left 18000850 -- the m18 Stranded Graveyard tutorial pair,
+    # which was paying for pickups around Agheel Lake North, Gatefront and Warmaster's Shack because
+    # their m60_10_09_02 column had filed them on phantom tile (10,09). Decoded, they sit on
+    # m60_42_37 / m60_42_39 and are dealt to the field bosses actually standing there: 1042370800 x2
+    # and 1042380800. ZERO region crossings -- SWEEP_REGION is 'Limgrave' for the old owner and the
+    # new owner of all three, and for all six additions the new owner's SWEEP_REGION equals the
+    # member's own region (Cerulean, Abyssal, Liurnia, Altus, Consecrated Snowfield x2), so #1059 is
+    # satisfied member by member.
+    # ALARIC'S RULING, 2026-09-13, measured by (trigger, flag) against origin/main ed90bd50 with the
+    # rest of this pass: digest 988c8ffdc0bda9fd -> ae600a3cfe980be8, n 4124 -> 4134. ADDED 10 more (the
+    # nine statue-gated m34_11 flags above, all to 1037460800 Bell Bearing Hunter, m60_37_46 --
+    # Chebyshev 1 from the m60_38_46 anchor and the nearest Liurnia field boss to the Study Hall).
+    # REMOVED 0. RE-OWNED 5 MORE: the five ordinary-layout m34_11 rows 34110800 used to hold
+    # (f34117010, f34117060, f34117080, f34117200, f34117700) follow the same anchor to the same boss.
+    # ZERO region crossings -- SWEEP_REGION is 'Liurnia' for 34110800 and for 1037460800 alike, so
+    # every one of these fifteen stays inside its own region and #1059 holds.
+    # ALARIC'S RULING, 2026-09-18: the Seethewater Tibia Mariner 1038520800 is an Altus boss whose
+    # Gelmir grace-cluster checks (#1124) stay in Mt. Gelmir. Ruled through
+    # _FIELD_SWEEP_REGION_CURATED. Measured by (trigger, flag) against origin/main 5b9fe48c: digest
+    # ae600a3cfe980be8 -> 7a811b40adcdc70b, n 4134 UNCHANGED. 30 removed / 31 added / 29 flags
+    # re-owned, none lost or gained. The Gelmir members leave the Mariner for Demi-Human Queen
+    # Maggie 1037530800 (15) and the Ulcerated Tree Spirit 1037540810 (5); the Mariner takes four
+    # Altus flags from Gilika 1038510800; the rest is the Altus round-robin re-phase. ZERO region
+    # crossings -- #1059 holds member by member.
+    # 2026-09-22 (player report, log-traced), measured by (trigger, flag) against origin/main
+    # c08ba9b9: digest 7a811b40adcdc70b -> 89af6dba5e5f6cb7, n 4134 -> 4135. ADDED 1, REMOVED 0,
+    # RE-OWNED 0: f510800 Grafted Blade Greatsword joins trigger 1043300800 Leonine Misbegotten,
+    # its own boss's own vanilla drop. See the corpus-total docstring above for WHY -- the
+    # scripted common-event boss-reward-lot family is invisible to #907's own-drop admission, and
+    # this one specific chain (m60_43_30 event 1043302800's `EndIf(EventFlag(1043300800))` guard)
+    # can be permanently stranded by the same CharacterDead-race shape #907 exists to route
+    # around. ZERO region crossings -- SWEEP_REGION is 'Weeping' for 1043300800 and the check's
+    # own region alike, so #1059 holds.
+    # 2026-09-25 (#1522): digest 89af6dba5e5f6cb7 -> 1588a14f6618b7e6, n 4135 -> 4131. REMOVED 4,
+    # ADDED 0, RE-OWNED 0 -- the four phantom map lots named in the corpus-total docstring above.
+    assert (digest, n) == ("1588a14f6618b7e6", 4131), (
+        "sweep OWNERSHIP changed: (%s, %d), expected (1588a14f6618b7e6, 4131). The total alone will "
+        "not tell you what moved -- diff by (trigger, flag), never by ap id." % (digest, n))

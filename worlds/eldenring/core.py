@@ -1,0 +1,2800 @@
+"""Greenfield ER world -- CORE (stable).
+
+Owns the parts every seed needs and every feature depends on: region scope (num_regions), the
+hub-and-spoke regions, locks, goal, and the base keyless client contract. SPEC-PARITY phases live in
+features/ and are aggregated here via registry.py -- adding a phase does NOT edit this file.
+
+Data-derived + matt-free (see ../LESSONS-LEARNED.md): rules keyed by REGION only.
+"""
+import logging
+import os
+from typing import Any, Dict, List, Optional, Set
+
+from dataclasses import fields as dataclass_fields, make_dataclass
+
+from BaseClasses import Region, Location, Item, ItemClassification
+from worlds.AutoWorld import World, WebWorld
+from Options import (PerGameCommonOptions, Range, Choice, Toggle, DefaultOnToggle,
+                     OptionError, OptionGroup, Visibility)
+
+from .gamename import GAME as _GAME
+# THE data tables (#1464). ONE call, and it is the FIRST world-local import on purpose: a tree with
+# no `tables/` package fails HERE, with MissingTablesError naming the modules, rather than from the
+# middle of this file (or, worse, in one of the tolerant `except ImportError` fallbacks that used to
+# guard each generated module and would have degraded to an empty table). Nothing below imports a
+# generated module by name -- tests/test_gf_data_tables_loader.py enforces that.
+from . import table_loader
+TABLES = table_loader.load()
+
+HUB = TABLES.hub
+REGIONS = list(TABLES.regions)
+LOCATIONS = TABLES.locations
+FINALE_REGION = TABLES.finale_region
+FINALE_HOST_REGION = TABLES.finale_host_region
+from . import item_categories
+DEFAULTED_REGION_APS = TABLES.defaulted_region_aps   # checks whose region is a GUESS -> filler only
+
+HUB_UNATTRIBUTED_APS = TABLES.hub_unattributed_aps   # hub fallback with no award-site evidence
+
+# m11_00 (normal Leyndell) -- DESTROYED when Maliketh dies. Same predicate, different cause.
+ERDTREE_BURN_APS = TABLES.erdtree_burn_aps
+
+# A check that can become PERMANENTLY UNREACHABLE may not carry PROGRESSION. Two independent causes,
+# one rule: we don't know where it is (DEFAULTED_REGION_APS), or the player can destroy it
+# (ERDTREE_BURN_APS -- kill Maliketh, the Erdtree burns, normal Leyndell ceases to exist).
+SHOP_RELEASE_GATED_APS = TABLES.shop_release_gated_aps
+
+# Three ways a check can be UNREACHABLE while AP believes otherwise. All three answer the same predicate:
+# a check we cannot ASSERT is reachable may not be REQUIRED.
+#   DEFAULTED_REGION_APS   -- we GUESSED the region (hub fallback); the item may sit in a sealed region.
+#   ERDTREE_BURN_APS       -- m11_00 is DESTROYED when Maliketh dies; the player can burn it early.
+#   SHOP_RELEASE_GATED_APS -- the merchant does not STOCK the row until an unlock event fires. Region
+#                             reachability is necessary but NOT sufficient: the shop can be open and the
+#                             row simply not on the shelf.
+_NO_PROGRESSION_APS = (frozenset(DEFAULTED_REGION_APS) | frozenset(HUB_UNATTRIBUTED_APS)
+                       | frozenset(ERDTREE_BURN_APS)
+                       | frozenset(SHOP_RELEASE_GATED_APS))
+from .region_spine import (compute_kept, describe_kept, GOAL_REGION, DLC_REGIONS,  # noqa: F401 (GOAL_REGION used by tests/features)
+                           base_regions, dlc_regions, REGION_PARENT)
+from . import registry
+from .defaults import FROZEN_OPTIONS, apply_frozen
+from .option_presets import OPTIONS_PRESETS
+from . import contract
+from . import features as _features  # noqa: F401  -- import triggers feature self-registration
+from .features.bingo import active as _bingo_active
+from .features import natural_progression as _np  # vanilla/natural-progression mode (zero synthetic locks)
+from .features import vanilla_placement as _vp  # every item back in its base-game spot (zero AP gating)
+from .features import goal_locations as _gl  # GOAL_CHOICES / forced_regions (the explicit `goal` option)
+from .features import finale as _finale  # ASHEN_LOCK_ITEM / finale_active (SPEC-ashen-capital-lock)
+from .features import progression_surface as _ps  # independent goal-region requirement axis
+from .features import multiworld_scope as _mws  # which checks exchange items (#1612)
+from .features import evidence_progression_hosts as _eph  # v0.6 audited progression-host policy
+from .features import traps as _traps  # spawn_item_name -- the spawn-trap id block below
+from .merchant_bell_pool import merchant_bell_pool_allowed
+REGION_OPEN_FLAGS = TABLES.region_open_flags  # generated (Phase 0); empty when un-generated
+ITEM_CATALOG, LOCATION_ITEM = TABLES.item_catalog, TABLES.location_item  # real-item-pool
+GOODS_HOLD_CAP = TABLES.goods_hold_cap        # name -> game stack ceiling (#308)
+from .hold_cap import hold_budget, hold_slot_available
+FILLER_POOL = TABLES.filler_pool              # varied junk filler
+DLC_ITEM_NAMES = TABLES.dlc_item_names        # DLC-only catalog names; excluded when DLC off
+from .tarnished_pack import pool_excluded_names  # Tarnished Pack (2026-08-28) pool exclusion (#241)
+LOCATION_UNITS = TABLES.location_units        # (#616): ap_id -> copies its lot grants; absent = 1
+
+GAME = _GAME  # the AP game name lives in gamename.py (#1465); this stays the world-side alias
+FILLER = "Rune"
+
+
+def stacked_vanilla_name(nm, ap_id, name_to_id):
+    """`nm` -> the STACKED item name for a location whose vanilla lot grants more than one copy.
+
+    ItemLotParam slots carry a quantity, and `LOCATION_UNITS` (generated, #616) is the ones that are
+    not 1. A check that vanilla-drops two of something has always paid ONE here, because the number
+    was captured at regen and never read: four `Scadutree Fragment` lots drop x2, so a seed that
+    kept all 46 fragment checks carried 46 units against the base game's 50, and the Scadutree
+    blessing -- which is a pure function of that count -- sat a rung low all the way through.
+
+    THE STACK IS A SECOND AP ITEM, NOT A COUNT ON THE FIRST. `itemCounts` is keyed by AP item id and
+    every copy of a name shares one, so stacking there would double the x1 placements too. So the
+    promotion is to a NAME: `Scadutree Fragment` -> `Scadutree Fragment x2`, minted by
+    features/scadu_supply with its own id, the same game FullID and itemCounts = 2.
+
+    GENERAL. The promotion fires only when the stacked name is a REGISTERED AP item. `lot_stacks`
+    registers every resolvable source-lot quantity, so all captured multi-copy locations pay the
+    exact lot count; curated category bundles use their own stacked names and cannot alter it.
+
+    Returns (name, units). `units` is 1 whenever the name did not move, so a caller can charge a
+    budget by what was actually handed over without re-deriving it.
+    """
+    if not nm:
+        return nm, 1
+    n = LOCATION_UNITS.get(ap_id, 1)
+    if n <= 1:
+        return nm, 1
+    stacked = "%s x%d" % (nm, n)
+    return (stacked, n) if stacked in name_to_id else (nm, 1)
+
+
+_GOODS_NIBBLE = 0x40000000  # ER FullID category nibble for GOODS
+_FILLER_GAME_ID = 2900      # Golden Rune [1] (vanilla EquipParamGoods) -- generic filler grant
+
+_FEATURES = registry.features()
+
+# ---- Great Runes (ending goal) ---------------------------------------------------------------
+# The Great Rune items exist in the real-item-pool ONLY when ItemShuffle is on (they are the
+# vanilla drops of the Great-Rune boss locations). Identified purely by name from ITEM_CATALOG, so
+# this stays data-derived + matt-free. There are 6 in vanilla ER (Godrick's, Radahn's, Morgott's,
+# Rykard's, Mohg's, Malenia's). The great_runes ending goal can require up to this many.
+# SEVEN, and defined ONCE in item_categories (keyed on the goods row, not the item NAME --
+# "Great Rune of the Unborn" does not carry the suffix, which is how four separate copies of
+# this predicate all counted six). Alaric ruled 2026-08-16 that the Unborn rune is a full
+# citizen everywhere.
+GREAT_RUNES: List[str] = item_categories.GREAT_RUNES
+
+
+# ---- core options ----------------------------------------------------------------------------
+class NumRegions(Range):
+    """How many map regions (Limgrave, Caelid...) your seed uses. Fewer = a shorter run.
+
+    0 uses the whole map (28 with the DLC, 17 without, 11 with DLC Only). The seed can
+    outgrow the number: a region behind another brings it along (Leyndell brings Altus),
+    and your Final Boss or Allowed Starting Regions can add more.
+    """
+    display_name = "Number of Regions (0 = all)"
+    range_start = 0
+    range_end = len(REGIONS)
+    default = 6
+
+
+class NumRegionsOrder(Choice):
+    """Whether your seed's regions are picked at random or in the game's own order.
+
+    Only matters when Number of Regions (N) is below the whole map. It does not choose
+    where you start. Change it only for a predictable early-game run. Ignored by Natural
+    Progression and Vanilla Placement.
+    rolled: N random regions, different every seed (default)
+    vanilla_order: first N in game order, DLC last; same regions every seed
+    """
+    visibility = Visibility.all & ~Visibility.simple_ui
+    # 🛑 THIS DOCSTRING IS THE PLAYER-FACING TEXT. tools/dump_options_metadata.py dumps it
+    # verbatim into wizard/options-metadata.json and inlines it in wizard.html, and AP shows it as
+    # the option tooltip -- so the rationale below is a COMMENT on purpose. It was briefly in the
+    # docstring and shipped an internal changelog entry to players in the wizard.
+    #
+    # WHY IT WENT, AND WHY IT IS BACK. Removed 2026-08-05: as the only alternative to `rolled` it
+    # kept the first N of a fixed Limgrave-first path, so every seed at the default num_regions=6
+    # kept the SAME eight regions -- Limgrave, Weeping, Stormveil, Liurnia, Raya Lucaria Academy,
+    # Caelid, plus Leyndell and Altus by goal closure -- and nine base regions could never appear.
+    # Over 3000 seeds the random draw puts every base region in the 34-37% band and excludes none.
+    # Restored 2026-08-11 (Alaric) VERBATIM, as an opt-in: that determinism is a feature when it is
+    # chosen and a defect when it is the only behaviour, and `rolled` is the default either way.
+    #
+    # 🛑 THE RENAME IS THE POINT, not tidiness. Two shipped docs had called `spine` the DEFAULT (it
+    # was not) and said it controlled where you START (it did not, and still does not -- the
+    # opening region is an independent size-weighted draw in
+    # features/start_grace.pick_anchor_region). Alaric's first instinct in August was
+    # `spine -> limgrave_start`, which would have baked that exact misreading into the name.
+    # `vanilla_order` describes the ORDER the regions are taken in, which is all it has ever done.
+    display_name = "How Regions Are Chosen"
+    option_rolled = 0
+    option_vanilla_order = 1
+    # ⭐ `spine` was this value's name until 2026-08-11 and is kept as an AP ALIAS, not a second
+    # option: `alias_*` resolves on input and is deliberately absent from `name_lookup`
+    # (Options.py:96-98), so an old yaml keeps generating while the wizard, the spoiler and
+    # `current_key` all say `vanilla_order`. A second `option_spine = 1` would NOT do this -- it
+    # would put both names in the lookup and make which one gets displayed an ordering accident.
+    # 🛑 Do not retire the alias without checking what AP does with an unknown Choice value in a
+    # yaml already in the wild: `Choice.from_text` RAISES, so dropping it is a hard generation
+    # failure for those players, not a warning.
+    alias_spine = 1
+    default = 0
+
+    # 🛑 `random` CANNOT be an option name here. Archipelago reserves it -- Options.py's metaclass
+    # asserts "Choice option 'random' cannot be manually assigned", because `random` is already the
+    # yaml-level magic that makes AP pick a value for you. 🛑 This mattered less while both values
+    # behaved identically; now they do NOT, so `num_regions_order: random` means "AP picks rolled
+    # or vanilla_order for me", which is a real (and legitimate) third thing rather than a synonym.
+
+
+class ItemShuffle(Toggle):
+    """off (default): every check pays out a generic Rune. on: each location's own vanilla item
+    becomes an AP item and all of them are shuffled among the checks (74% of checks carry a real
+    vanilla item; the rest fall back to Rune). Region Locks stay the only progression, so any
+    shuffle is winnable."""
+    display_name = "Shuffle Vanilla Items"
+
+
+class Goal(Choice):
+    """Which boss fight ends your run.
+
+    Leave it on auto unless you want a DLC or Malenia ending. You finish by meeting the
+    ending requirements (see Great Runes Needed to Finish and Regions Needed to Finish) and
+    beating that boss. A Final Boss your settings rule out stops generation: elden_beast and
+    malenia with DLC Only, promised_consort with Enable DLC off.
+
+    auto: as elden_beast; Promised Consort Radahn with DLC Only (default)
+    elden_beast: Hoarah Loux + Elden Beast (what auto picks, unless DLC Only)
+    promised_consort: Promised Consort Radahn; adds Enir Ilim to your seed
+    malenia: Malenia only; adds the Haligtree; warp to its Canopy, then walk
+    """
+    display_name = "Final Boss"
+    option_auto = 0
+    option_elden_beast = 1
+    option_promised_consort = 2
+    option_malenia = 3
+    default = 0
+
+
+class EndingCondition(Choice):
+    """Whether finishing needs Great Runes at all.
+
+    Despite its name, region_locks does not require Region Locks; Regions Needed to Finish
+    does, and region_locks with that at none gates nothing, so generation stops. Great
+    Runes Needed to Finish sets the count for great_runes.
+    great_runes: the ending needs the Great Runes count you set (default)
+    region_locks: no Great Runes needed
+    """
+    display_name = "Ending Condition"
+    option_region_locks = 0
+    option_great_runes = 1
+    default = 1
+
+
+class GreatRunesRequired(Range):
+    """How many of the seven Great Runes you must hold to finish.
+
+    Raise it for a longer hunt, lower it for a shorter one. Any of the seven count,
+    the Great Rune of the Unborn included; none is mandatory. You must hold the Great
+    Rune itself: beating its boss is not enough, because they are shuffled items that
+    land on Progression Surface checks, possibly in other players' worlds. Only used
+    when Ending Condition is great_runes.
+    """
+    display_name = "Great Runes Needed to Finish"
+    range_start = 1
+    # DERIVED, not typed (#405), and it is SEVEN again -- by derivation this time, not by typing.
+    #
+    # The history is worth keeping because the two halves cancelled and hid each other. #405 cut a
+    # literal 7 down to len(GREAT_RUNES) because the derivation only yielded six, and the reasoning
+    # written down here -- "the Unborn rune is not in the catalog at all" -- was TRUE when it was
+    # written and FALSE from 2026-08-06, when Rennala's flag-197 co-check put goods 10080 in the
+    # catalog and on a location. The cap did not move, because GREAT_RUNES was a name-suffix match
+    # and "Great Rune of the Unborn" does not carry the suffix. A derived constant is only as
+    # derived as its predicate: this one silently kept answering the old question.
+    #
+    # It is now keyed on the goods row (item_categories.GREAT_RUNE_GOODS_IDS), so the cap moves with
+    # the data and a rune that stops resolving reddens a test instead of shrinking the set.
+    range_end = len(GREAT_RUNES)
+    default = 4
+
+
+class EnableDLC(DefaultOnToggle):
+    """Includes the Shadow of the Erdtree DLC in your run.
+
+    Turn this off without the DLC, or you may get checks in areas you cannot enter.
+    On (default; DLC Only forces it): Number of Regions can draw DLC regions and DLC items
+    can appear. Off: no DLC region or item appears (except Enable DLC Gear's gear); Final
+    Boss promised_consort, or a DLC name in Allowed Starting Regions, stops generation
+    (Natural Progression and Vanilla Placement ignore that list).
+    """
+    display_name = "Enable DLC"
+
+
+class EnableDLCGear(Toggle):
+    """Lets Shadow of the Erdtree gear drop in a run that has the DLC turned off.
+
+    For owners who keep Enable DLC off: DLC weapons, armor, talismans, Ashes of War, spells,
+    spirit ashes and crystal tears can show up as rewards; two DLC tears (Bloodsucking
+    Cracked Tear, Deflecting Hardtear) always do. Nothing else DLC is added; off (default)
+    keeps gear base-game only. No effect with Enable DLC or DLC Only on, and almost none
+    with Original Item Pool on.
+    """
+    visibility = Visibility.all & ~Visibility.simple_ui
+    display_name = "Enable DLC Gear"
+
+
+class EnableTarnishedPack(Toggle):
+    """Includes the paid Tarnished Pack's gear, and its shop and field checks, in your run.
+
+    Turn this on only if you own the pack, or you may receive items you cannot use. On lets
+    its 26 weapons, shields and armor pieces appear as rewards and adds up to 14 checks (3
+    field pickups, 11 merchant purchases that need Shop Checks on). Its Spectral Steed
+    outfits and NPC invasion rewards are not included. Off (default): none of it is in your
+    seed.
+    """
+    display_name = "Enable Tarnished Pack"
+
+
+class DLCOnly(Toggle):
+    """Limits your run to Shadow of the Erdtree; base-game regions are locked out.
+
+    Forces Enable DLC on. Final Boss auto ends on Promised Consort Radahn in Enir Ilim, a
+    region always included on top of Number of Regions. Final Boss elden_beast or malenia
+    stops generation, as do base-game names in Allowed Starting Regions (Natural
+    Progression and Vanilla Placement ignore that list). The default Great Runes ending
+    works; all seven runes join the pool.
+    """
+    display_name = "DLC Only"
+
+
+_CORE_OPTION_FIELDS = [("num_regions", NumRegions), ("num_regions_order", NumRegionsOrder),
+                       ("item_shuffle", ItemShuffle), ("goal", Goal),
+                       ("ending_condition", EndingCondition),
+                       ("goal_great_runes", GreatRunesRequired),
+                       ("enable_dlc", EnableDLC),
+                       ("enable_dlc_gear", EnableDLCGear),
+                       ("enable_tarnished_pack", EnableTarnishedPack),
+                       ("dlc_only", DLCOnly)]
+# v0.2 option-matrix slim: FROZEN_OPTIONS are no longer yaml-settable -- they are the BEHAVIOUR
+# (see defaults.py). Their classes stay declared in the features (so the slot_data / options-echo
+# keys keep being emitted and the client contract is unchanged); they are just filtered out of the
+# yaml surface here and injected back as frozen stand-ins in generate_early.
+GFOptions = make_dataclass(
+    "GFOptions",
+    [(n, o) for (n, o) in registry.collect_option_fields(_CORE_OPTION_FIELDS, _FEATURES)
+     if n not in FROZEN_OPTIONS],
+    bases=(PerGameCommonOptions,),
+)
+GFOptions.__module__ = __name__
+
+
+# ---- item + location catalogs (core + feature items) ----------------------------------------
+_ITEM_BASE = TABLES.lock_item_id_base   # 7780000 -- the id space is table_loader's (#1464)
+_core_item_ids: Dict[str, int] = {f"{r} Lock": _ITEM_BASE + i for i, r in enumerate(REGIONS)}
+_core_item_ids[FILLER] = _ITEM_BASE + len(REGIONS)
+# SPEC-ashen-capital-lock: the ONE synthetic lock whose region is not in REGIONS. Allocated AFTER
+# filler rather than inside the REGIONS enumeration on purpose -- appending here leaves every
+# existing "<Region> Lock" id and FILLER's id exactly where they were, so this spec does not
+# renumber the item space out from under anything that has already shipped.
+ASHEN_LOCK = _finale.ASHEN_LOCK_ITEM
+_core_item_ids[ASHEN_LOCK] = _ITEM_BASE + len(REGIONS) + 1
+item_name_to_id: Dict[str, int] = registry.allocate_item_ids(
+    _core_item_ids, _ITEM_BASE + len(REGIONS) + 2, _FEATURES)
+
+_core_item_class: Dict[str, Any] = {f"{r} Lock": ItemClassification.progression for r in REGIONS}
+_core_item_class[FILLER] = ItemClassification.filler
+_core_item_class[ASHEN_LOCK] = ItemClassification.progression
+_item_class: Dict[str, Any] = registry.collect_item_classes(_core_item_class, _FEATURES)
+
+location_name_to_id: Dict[str, int] = {
+    name: ap_id for locs in LOCATIONS.values() for (name, ap_id, _flag) in locs
+}
+from .bingo_board import LOCATION_NAMES as _BINGO_LOCATIONS
+location_name_to_id.update(_BINGO_LOCATIONS)
+_AP_IDS_TO_ITEM_IDS: Dict[str, int] = {str(item_name_to_id[FILLER]): _FILLER_GAME_ID | _GOODS_NIBBLE}
+
+# real-item-pool: register each distinct vanilla item as an AP item (id -> game FullID). The
+# useful/filler split is item_categories.CATEGORY_CLASS -- ONE taxonomy, asked here for
+# CLASSIFICATION and in features/local_items + features/keep_out_of_shops for LOCALITY. It replaced
+# a private nibble test (`_classify_full`, goods -> filler) that was a second, coarser partition of
+# the same catalog living in a different file. Locks remain the only progression.
+_REAL_ITEM_BASE = TABLES.real_item_id_base   # 7790000 -- see table_loader (#1464)
+_CLASS_BY_KEY = {item_categories.USEFUL: ItemClassification.useful,
+                 item_categories.FILLER: ItemClassification.filler}
+
+
+def _classify_catalog(name: str) -> ItemClassification:
+    """Classification for a VANILLA catalog item.
+
+    `class_of` answers None only for a name OUTSIDE `ITEM_CATALOG`, which the loop below cannot
+    produce -- so the KeyError this would raise on None is the assertion, not an oversight. A
+    feature-minted name keeps whatever its own `ITEMS` declared (registry.collect_item_classes);
+    classifying one from here would overrule a Lock, a boss key or a trap, which is exactly what
+    item_categories.class_of returning None exists to prevent."""
+    return _CLASS_BY_KEY[item_categories.class_of(name)]
+for _idx, _nm in enumerate(sorted(ITEM_CATALOG)):
+    if _nm not in item_name_to_id:
+        _aid = _REAL_ITEM_BASE + _idx
+        item_name_to_id[_nm] = _aid
+        _AP_IDS_TO_ITEM_IDS[str(_aid)] = ITEM_CATALOG[_nm]
+        _item_class[_nm] = _classify_catalog(_nm)
+
+# SPAWN TRAPS -- registered HERE, outside `allocate_item_ids`, at an id that is ARITHMETIC in the
+# chr model. 390 synthetic filler names, one per spawnable enemy (features/traps.py).
+#
+# 🛑 WHY NOT THROUGH THE FEATURE. `allocate_item_ids` walks features in import order handing out
+# SEQUENTIAL ids, so putting 390 names in `TrapsFeature.ITEMS` would shift the AP id of every
+# feature-minted item registered after it -- the same renumbering ASHEN_LOCK is appended to avoid a
+# few lines above, at 390x the blast radius.
+#
+# ⭐ AND WHY ARITHMETIC RATHER THAN `enumerate`. `_REAL_ITEM_BASE + _idx` above is stable only while
+# the catalogue's SORTED ORDER is: insert one name and every id after it moves. Keying on the model
+# instead makes an id a pure function of the enemy, so blessing a new family (or dropping one the
+# datamine stops admitting) renumbers NOTHING -- which is also what makes issue #114 rule 4
+# ("removing a trap name is a compat break") cost nothing on this surface.
+#
+# 🛑 The block must not overlap _ITEM_BASE or _REAL_ITEM_BASE. Every chr model is under 10000, so a
+# 10000-wide block clears both; `test_gf_spawn_traps` asserts the disjointness rather than trusting
+# this comment, because the catalogue above grows.
+_SPAWN_TRAP_BASE = 7800000
+for _c in sorted(TABLES.spawn_traps):
+    _nm = _traps.spawn_item_name(_c)
+    item_name_to_id[_nm] = _SPAWN_TRAP_BASE + _c
+    # FILLER, always: issue #114 rule 3, no progression may ride a trap. And NO `_AP_IDS_TO_ITEM_IDS`
+    # entry -- a spawn trap is synthetic, so the game is never asked to hand the player an item for
+    # it; the client's name branch fires the effect instead.
+    _item_class[_nm] = ItemClassification.filler
+
+# ABILITY UNLOCK ITEMS (#945/#980) -- seven synthetic USEFUL items, one per lockable ability, at a
+# FIXED id block for the same reason the spawn traps use one: allocating them through a feature's
+# ITEMS would renumber every feature-minted item registered after it. Like a spawn trap they carry
+# NO `_AP_IDS_TO_ITEM_IDS` entry -- the game hands nothing over; the client turns a received id back
+# into an ability through the per-seed abilityUnlockItems map (features/ability_lock.py). USEFUL, not
+# filler: an unlock is worth finding and must never be swept or discarded as junk. Minted
+# unconditionally (so create_item works whenever asked); only POOLED under ability_lock_mode:
+# progressive, by features/ability_lock.create_items.
+for _idx, (_key, _nm) in enumerate(contract.ABILITY_UNLOCK_ITEM_NAMES):
+    item_name_to_id[_nm] = contract.ABILITY_UNLOCK_ITEM_BASE + _idx
+    _item_class[_nm] = ItemClassification.useful
+
+# Mario unlocks use a separate reserved band. No existing feature/item ids are shifted, and
+# these synthetic capabilities never enter the game's physical item-grant map.
+for _idx, (_key, _nm) in enumerate(contract.MARIO_UNLOCK_ITEM_NAMES):
+    item_name_to_id[_nm] = contract.MARIO_UNLOCK_ITEM_BASE + _idx
+    _item_class[_nm] = ItemClassification.useful
+
+for _key, _nm, _aid, _count in contract.MARIO_STAT_ITEMS:
+    item_name_to_id[_nm] = _aid
+    _item_class[_nm] = ItemClassification.useful
+
+for _key, _nm, _aid, _count in contract.MARIO_FLUDD_ITEMS:
+    item_name_to_id[_nm] = _aid
+    _item_class[_nm] = ItemClassification.useful
+
+for _key, _nm, _aid, _count in (*contract.MARIO_CAPPY_ITEMS, *contract.MARIO_SONIC_ITEMS):
+    item_name_to_id[_nm] = _aid
+    _item_class[_nm] = ItemClassification.useful
+
+# Progressive talismans reserve a fixed band so new families cannot renumber older items.
+from .features.power_progression import ITEM_IDS as _POWER_ITEM_IDS
+for _nm, _aid in _POWER_ITEM_IDS.items():
+    item_name_to_id[_nm] = _aid
+    _item_class[_nm] = ItemClassification.useful
+
+# FEATURE-MINTED GRANTS. `registry.allocate_item_ids` gives a feature's ITEMS an AP id, but nothing
+# tells the client what one resolves to: `_AP_IDS_TO_ITEM_IDS` is built from ITEM_CATALOG above, so
+# a minted item is a name the game can never hand over. That is why scadu_supply's fragment stayed
+# out of ITEMS for so long. ITEM_GRANTS closes it: the feature names the FullID and the quantity,
+# which are the two things core cannot infer, and the item becomes grantable like any other.
+#
+# A SECOND AP ID MAY POINT AT THE SAME FullID -- that is the point of it. "Scadutree Fragment x2"
+# resolves to the same goods row as the x1 and rides itemCounts = 2, so the two exist independently
+# and a vanilla-placed fragment is untouched by a change to the injected stack.
+_FEATURE_ITEM_COUNTS: Dict[str, int] = {}
+for _f in _FEATURES:
+    for _nm, (_full, _qty) in getattr(_f, "ITEM_GRANTS", {}).items():
+        _aid = item_name_to_id.get(_nm)
+        if _aid is None or not _full:
+            continue
+        _AP_IDS_TO_ITEM_IDS[str(_aid)] = _full
+        if int(_qty) > 1:
+            _FEATURE_ITEM_COUNTS[str(_aid)] = int(_qty)
+
+
+class GFItem(Item):
+    game = GAME
+
+
+class GFLocation(Location):
+    game = GAME
+
+
+# ---- option groups -- the wizard's tabs AND the WebHost's sections ---------------------------
+# ONE grouping, read by two surfaces. Archipelago's player-options page renders `option_groups`
+# directly; tools/dump_options_metadata.py reads the same list off this class and emits it into the
+# wizard metadata, where each non-collapsed group becomes its own wizard STEP.
+#
+# MOTIVATING CASE (CONTRIBUTING rule 11). Until this landed, `option_groups` was undefined and the
+# dumper emitted `"groups": []` with every key in `ungrouped`, so the wizard's whole 54-option
+# surface arrived as ONE accordion inside a step captioned "Everything here is safe to skip -- the
+# defaults are fine." The four scaling knobs and the pool builder were filed under the same
+# "Other Options (54)" summary as `no_fall_damage`, behind a gate telling the player not to open it.
+# The grouping machinery on the page had existed the whole time; nothing fed it.
+#
+# Keyed by YAML KEY, not by class, because the option surface is built dynamically
+# (`make_dataclass(registry.collect_option_fields(...))` above) -- there is no static module to
+# import the classes from, and a frozen option's class stays declared in its feature while the field
+# disappears. `_option_groups()` resolves keys against the live dataclass and drops what FROZEN_OPTIONS
+# removed; a key that is neither live NOR frozen is a TYPO and raises at import.
+#
+# 🛑 A NEW OPTION IS NOT AUTOMATICALLY GROUPED. Leave it out of this table and it lands in the
+# wizard's `ungrouped` bucket, i.e. back inside Advanced -- which is exactly the failure above, just
+# one option at a time. tests/test_gf_option_groups.py fails on any ungrouped visible key.
+_OPTION_GROUPS = [
+    # The six decisions a first seed needs. Everything else has a sensible default.
+    ("Start Here", [
+        "enable_dlc", "num_regions", "goal", "goal_great_runes", "enemy_scaling", "death_link",
+    ]),
+    # How the run is shaped and what ends it. Advanced rows follow the basic ones.
+    ("Regions & Finish Line", [
+        "goal_region_unlock_policy", "ending_condition", "start_region_pool", "start_regions",
+        "region_grace_unlock",
+        # advanced (hidden from the simple UIs)
+        "bingo_mode", "bingo_board_size", "bingo_catalogue", "bingo_graces", "bingo_region_limit", "bingo_goal", "bingo_square_count", "bingo_line_sweep_size",
+        "required_bosses", "num_regions_order", "start_region_selection", "grace_attunement",
+        "grace_attunement_anchor",
+        # compat-only (hidden everywhere but the weighted page)
+        "leyndell_runes_required",
+    ]),
+    # Shadow of the Erdtree content and how Scadutree Blessings work.
+    ("DLC & Blessings", [
+        "enable_tarnished_pack", "dlc_only",
+        # advanced (hidden from the simple UIs)
+        "enable_dlc_gear", "scadutree_blessing_scope", "dlc_blessing_catchup",
+        # compat-only (hidden everywhere but the weighted page)
+        "global_scadutree_blessing",
+    ]),
+    # Enemy scaling dials and trap items.
+    ("Difficulty & Traps", [
+        "traps", "trap_count", "minimum_enemy_difficulty", "maximum_enemy_difficulty",
+        "difficulty_ramp_speed", "progressive_talismans",
+        # advanced (hidden from the simple UIs)
+        "spawn_traps", "coop_difficulty", "scale_rune_rewards",
+    ]),
+    # What counts as a check and what the item pool is made of.
+    ("Checks & Item Pool", [
+        "dungeon_sweep", "protect_missable_locations", "armor_bundles", "vanilla_pool",
+        # advanced (hidden from the simple UIs)
+        "full_area_sweeps", "region_sweep", "reveal_sweep_boss_names", "reroll_enemy_drops",
+        "reroll_mine_materials", "curated_filler", "pool_builder_intensity",
+        "pool_builder_pct_weapons", "pool_builder_pct_armor", "pool_builder_pct_spells",
+        "pool_builder_pct_talismans", "pool_builder_pct_ashes_of_war",
+    ]),
+    # How your items and other players' items are shared.
+    ("Multiworld & Placement", [
+        "progression_surface", "keep_local", "progression_sharing", "filler_foreign_pct",
+        "region_sync", "trap_link",
+        # advanced (hidden from the simple UIs)
+        "confine_foreign_progression", "keep_local_rune_cap", "multiworld_scope", "death_link_amnesty_inbound",
+        "death_link_amnesty_outbound",
+    ]),
+    # Shop checks, what may be sold, and merchant unlocks.
+    ("Shops & Merchants", [
+        "shop_checks", "keep_out_of_shops", "merchant_bells_on_talk", "reroll_infinite_shop_stock",
+        "infinite_hub_wares", "progressive_stone_bells", "no_runes_in_shops",
+        # Frozen (FROZEN_OPTIONS), so it has no yaml key and no control today, but it stays FILED:
+        # an option that is unfrozen with no home here falls into the wizard's `ungrouped` bucket and
+        # renders inside Advanced (test_gf_rune_pricing pins this; the 2026-08-12 unfreeze needed it).
+        "rune_shop_pricing",
+        # compat-only (hidden everywhere but the weighted page)
+        "merchant_bell_logic",
+    ]),
+    # Comfort options: equipment, upgrades, flasks and doors.
+    ("Quality of Life", [
+        "auto_equip", "no_equip_load", "auto_upgrade", "auto_upgrade_from_stones",
+        "no_weapon_requirements",
+        "flatten_regular_upgrades", "progressive_flasks", "open_boss_doors",
+        "start_with_whetblades",
+        # advanced (hidden from the simple UIs)
+        "capital_reconciler", "flask_upgrade_minimum",
+        # compat-only (hidden everywhere but the weighted page)
+        "flask_upgrades_on_progression_surface",
+    ]),
+    # Collapsed. These change the randomizer's basic premise.
+    ("Experimental", [
+        "natural_progression", "vanilla_placement", "locked_abilities", "ability_lock_mode", "mario_mode",
+        "mario_stat_upgrades", "mario_fludd", "mario_cappy", "mario_sonic_movement",
+        # advanced (hidden from the simple UIs)
+        "ability_unlocks_required",
+    ], True),
+]
+
+
+def _option_groups() -> List[OptionGroup]:
+    """`_OPTION_GROUPS` resolved against the LIVE yaml surface.
+
+    A key removed by FROZEN_OPTIONS is dropped silently -- freezing an option is a deliberate act
+    that already has its own home in defaults.py, and it must not also require an edit here. A key
+    that is neither live nor frozen is a typo and raises: the alternative is an option that silently
+    stops being grouped, which is invisible on both surfaces. A group left empty by freezing is
+    omitted entirely, because AP asserts every group has at least one option.
+    """
+    live = {f.name: f.type for f in dataclass_fields(GFOptions)}
+    groups = []
+    for entry in _OPTION_GROUPS:
+        # (name, keys) or (name, keys, start_collapsed). A collapsed group renders inside the
+        # wizard's Advanced step and starts folded on AP's own options page -- it is the home for
+        # experimental options that should exist without greeting anyone (Alaric, 2026-08-20).
+        name, keys = entry[0], entry[1]
+        collapsed = bool(entry[2]) if len(entry) > 2 else False
+        unknown = [k for k in keys if k not in live and k not in FROZEN_OPTIONS]
+        if unknown:
+            raise AssertionError(
+                "core._OPTION_GROUPS[%r] names option(s) that are neither on GFOptions nor frozen: "
+                "%s -- fix the key or drop it." % (name, ", ".join(unknown)))
+        members = [live[k] for k in keys if k in live]
+        if members:
+            groups.append(OptionGroup(name, members, start_collapsed=collapsed))
+    return groups
+
+
+# THE ESSENTIALS TIER (2026-08-20, PR #910 follow-up; player complaint "too many options").
+# The options a player forming a seed actually DECIDES -- the shape-of-the-run knobs. Everything
+# else renders behind a per-section "More ..." fold in the wizard. Criterion: an option is
+# essential if it changes WHAT run you are having (goal, size, DLC ownership, where items are,
+# who may hold progression, death link); tuning HOW a decision behaves stays under More.
+# A judgement call, like the grouping itself -- promoting a key is a one-line edit here plus
+# `python tools/dump_options_metadata.py`.
+#
+# PRESENTATION ONLY: the wizard reads it from the metadata blob; AP's player-options page has no
+# such concept and is untouched; the emitted yaml cannot move. Validated at import: a key that is
+# not claimed by _OPTION_GROUPS is a typo (frozen keys are not "essential" -- they are not knobs).
+# tests/test_gf_option_groups.py asserts every open group keeps at least one essential, so no
+# section can silently become all-More.
+_ESSENTIAL_OPTIONS = frozenset({
+    # Goal & Regions -- how big, what ends it, and both goal gates (Alaric 2026-08-20: the rune
+    # count is prominent, and "all region locks required" -- goal_region_unlock_policy -- is a
+    # front-page yes/no whose regions_completed spelling is the deep cut)
+    "num_regions", "goal", "ending_condition", "goal_great_runes", "goal_region_unlock_policy",
+    # DLC & Blessings -- the ownership toggle alone; dlc_only is the More tier (Alaric 2026-08-20)
+    "enable_dlc", "enable_tarnished_pack",
+    # Difficulty & Scaling -- the headline toggle and the flavor decision; the dials stay under
+    # More behind the easy/standard/hard quick-picks the wizard draws
+    "enemy_scaling", "traps",
+    # Checks & Item Pool -- who sweeps (vanilla_placement/natural_progression moved to the
+    # collapsed Experimental group)
+    "dungeon_sweep",
+    # Multiworld & Placement -- the two decisions a multiworld newcomer is actually making
+    "death_link", "progression_surface",
+    # Shops & Merchants: NONE (Alaric 2026-08-20 -- keep_out_of_shops was a bobler request, usage
+    # unknown; a zero-essential group renders its rows directly under its own fold, no inner More)
+    # Quality of Life -- the comfort ladder: wear it, don't fat-roll from it, keep it levelled
+    "auto_equip", "no_equip_load", "auto_upgrade", "no_weapon_requirements",
+})
+_grouped_keys = {k for _e in _OPTION_GROUPS for k in _e[1]}
+_bad_essentials = sorted(_ESSENTIAL_OPTIONS - _grouped_keys)
+if _bad_essentials:
+    raise RuntimeError("_ESSENTIAL_OPTIONS names key(s) no group claims (typo or retired "
+                       "option): %s" % _bad_essentials)
+del _grouped_keys, _bad_essentials
+
+
+class GFWeb(WebWorld):
+    theme = "stone"
+    # Defined in the class BODY on purpose: WebWorldRegister validates option_groups in the
+    # metaclass, so an option landing in two groups fails at import. Assigning after the class is
+    # created would skip that check.
+    option_groups = _option_groups()
+    # "For dummies" starting points: a preset dropdown on the WebHost page and ready-made yamls under
+    # Players/Templates/Presets. Keys and values are pinned by tests/test_gf_options_presets.py.
+    options_presets = OPTIONS_PRESETS
+
+
+# After class creation on purpose (the mirror of the note above): essential_options is OUR
+# metadata for the wizard dumper, not an attribute WebWorldRegister knows -- assigning it in the
+# body would hand an unknown key to AP's metaclass for no benefit.
+GFWeb.essential_options = _ESSENTIAL_OPTIONS
+
+
+def _lock_hint_placements(locations, receiving_player: int, lock_names: Set[str]) -> Dict[str, Any]:
+    """Return the full AP coordinate for each of this slot's placed region Locks.
+
+    Location ids are only unique inside their owner's game, so the owner travels with the id. The
+    scan is global rather than `get_locations(receiving_player)`: that narrower call is exactly what
+    loses Locks which fill placed in another player's world.
+    """
+    placements = {}
+    for location in locations:
+        item = location.item
+        if (item is None or item.player != receiving_player or item.name not in lock_names
+                or location.address is None):
+            continue
+        if item.name in placements:
+            raise Exception(f"Lock item {item.name!r} has more than one post-fill placement")
+        placements[item.name] = {
+            "player": int(location.player),
+            "location": int(location.address),
+        }
+    return placements
+
+
+class GreenfieldEldenRingWorld(World):
+    @classmethod
+    def get_data_package_data(cls):
+        from .sweep_hints import data_package
+        return data_package(super().get_data_package_data())
+
+    def extend_hint_information(self, hint_data):
+        for feature in _FEATURES:
+            feature.extend_hint_information(self, hint_data)
+
+    game = GAME
+    web = GFWeb()
+    options_dataclass = GFOptions
+    options: GFOptions
+    item_name_to_id = item_name_to_id
+    location_name_to_id = location_name_to_id
+    # THE loaded data tables (#1464). `world.tables` is how a feature is meant to reach a generated
+    # table -- never `from ..tables.data import ...`. One object, loaded once at module import.
+    tables = TABLES
+    # Serpent-Hunter is deliberately absent from the randomized pool: the client grants it on
+    # entry to Rykard's arena. Keep the server from charging hint points for an item it cannot find.
+    hint_blacklist = frozenset({"Serpent-Hunter"})
+    origin_region_name = "Menu"
+
+    # ---- region scope (num_regions) -------------------------------------------
+    def _dlc_on(self) -> bool:
+        """Resolved: is DLC content in play this seed? dlc_only implies on; enable_dlc defaults
+        on. Mirrors _eligible_regions so region gating and pool-augmentation gating agree."""
+        dlc_only = bool(getattr(self.options, "dlc_only", None) and self.options.dlc_only.value)
+        enable_dlc = bool(getattr(self.options, "enable_dlc", None) is None
+                          or self.options.enable_dlc.value)
+        return dlc_only or enable_dlc
+
+    def _shop_checks_on(self) -> bool:
+        """Whether merchant purchase slots are AP checks (#994). Default ON; OFF removes them.
+        Read HERE and in features/shops.slot_data -- the location set and the slot-data tables must
+        agree, so both consult this one predicate."""
+        opt = getattr(self.options, "shop_checks", None)
+        return True if opt is None else bool(opt.value)
+
+    def _seed_locations(self, region_name):
+        """LOCATIONS[region] minus the rows THIS SEED cannot open -- the DLC-gated hub shop rows
+        (Enia's 36) when the DLC is off, and (#994) EVERY shop-check row when shop_checks is off.
+        ONE chokepoint on purpose: the region build, the pool assembly, the count-neutral total and
+        the slot-data tables all read it, so a location and its pool item can never disagree about
+        whether they exist. The first cut filtered only the region build and the 36 vanilla wares
+        stayed in the pool -- the bell test's count-neutrality caught 1003 items over 967 locations
+        (AzoTax, 2026-08-20)."""
+        rows = LOCATIONS.get(region_name, [])
+        # Patch 1.17 paid-pack checks are as ownership-sensitive as their items. Filter them at this
+        # same count-neutral chokepoint (not only during region creation), otherwise option-off
+        # seeds would still mint their pool items or publish their flags in slot data.
+        if not getattr(self, "gf_tarnished_pack_on", False):
+            from .tarnished_pack import TARNISHED_PACK_LOCATION_FLAGS as _tplf
+            rows = [t for t in rows if int(t[2]) not in _tplf]
+        # #994: drop every merchant-slot check (SHOP_ROW_FLAGS scope, ~562 rows) so no item -- yours
+        # or a foreign player's -- is ever gated behind a purchase. Filtered here so region build,
+        # pool, count and slot_data all agree the rows are gone; keep_out_of_shops / no_runes_in_shops
+        # then find no shop locations to constrain and are inert by construction.
+        if not self._shop_checks_on():
+            # SHOP_ROW_FLAGS is keyed by str(AP location id) -- t[1], the ap_id, NOT t[2] (flag).
+            _srf = TABLES.shop_row_flags
+            rows = [t for t in rows if str(t[1]) not in _srf]
+        # A few checks have a physical route through another region and an independent sweep
+        # route. Filter them here so a seed with neither route cannot retain an impossible check
+        # (and therefore an unmatched pool item).
+        try:
+            from .features.cross_region_access import location_available as _cross_available
+            rows = [t for t in rows if _cross_available(self, int(t[1]))]
+        except ImportError:
+            pass
+        if self._dlc_on():
+            return rows
+        _dgs = TABLES.dlc_gated_shop_check_flags
+        return [t for t in rows if int(t[2]) not in _dgs]
+
+    def _resolve_start_region_pool(self) -> frozenset:
+        """The regions `start_region_pool` allows the run to open in, validated. Empty = no constraint.
+
+        Empty ALSO when no Lock is minted (natural_progression / vanilla_placement) or
+        `start_with_region_lock` is off -- there is no anchor to constrain, and raising over an
+        option that cannot apply would fail a seed for a setting that does nothing in it. Same
+        inertness `start_regions` already has, decided in the same place.
+
+        🛑 EVERY REFUSAL NAMES THE REGION AND THE REASON. The three ways a named region cannot open
+        a run are invisible to each other -- your DLC toggles sealed it, your goal needs it, or it
+        is a child region reached through its parent -- and a single "that region is not available"
+        would send the player to the wrong one of the three.
+
+        A FOURTH refusal is about the SET, not a region: a pool smaller than `start_regions` cannot
+        seat the anchors (#690). It names both yaml keys because either one can be the one you meant
+        to change."""
+        opt = getattr(self.options, "start_region_pool", None)
+        named = frozenset(str(r) for r in (opt.value if opt is not None else ()) or ())
+        if not named:
+            return frozenset()
+        _slr = getattr(self.options, "start_with_region_lock", None)
+        if _np.is_on(self) or _vp.is_on(self) or _bingo_active(self) or not (_slr is not None and _slr.value):
+            return frozenset()
+        eligible = set(self.gf_eligible)
+        sealed = sorted(named - eligible)
+        if sealed:
+            dlc_only = bool(getattr(self.options, "dlc_only", None)
+                            and self.options.dlc_only.value)
+            raise OptionError(
+                "[eldenring] start_region_pool names %s, which this seed cannot contain: %s. Drop "
+                "the name or change the toggle." % (", ".join(sealed),
+                "dlc_only is on, so only the DLC's regions are in play" if dlc_only
+                else "enable_dlc is off, so the DLC's regions are sealed"))
+        goal_needs = sorted(named & set(self.gf_goal_forced))
+        if goal_needs:
+            raise OptionError(
+                "[eldenring] start_region_pool names %s, but this seed's goal (%s) needs %s -- a "
+                "run that opens in the region it ends in is over before it starts. Name a different "
+                "starting region or a different goal."
+                % (", ".join(goal_needs), self.gf_goal_choice, "them" if len(goal_needs) > 1
+                   else "it"))
+        gated = sorted(named & set(REGION_PARENT))
+        if gated:
+            raise OptionError(
+                "[eldenring] start_region_pool names %s, which is reached THROUGH another region "
+                "(%s) rather than opened directly, so it can never be where a run starts. Name its "
+                "parent instead." % (", ".join(gated),
+                                     ", ".join(REGION_PARENT[g] for g in gated)))
+        # FOURTH REFUSAL: the pool must be able to SEAT the count (#690). Everything above asks
+        # "can this name open a run?"; this asks "are there enough names left to open the run the
+        # yaml asked for?" -- `only` NARROWS the kept set to exactly these names before the anchor
+        # draw (features/start_grace.pick_anchor_regions), so a pool of 1 can never seat
+        # start_regions 2 no matter what else the seed does.
+        #
+        # 🛑 IT HAS TO DIE HERE. Reached the anchor pick instead, this is a bare ValueError out of
+        # start_grace -- a traceback, not a yaml diagnosis -- and its text used to advise "raise
+        # num_regions", which is the one thing that CANNOT help: the narrow happens before the
+        # draw, so a bigger draw adds regions the filter immediately removes. bobler hit exactly
+        # that on 2026-08-15 (num_regions 9, start_regions 2, start_region_pool [Caelid]), tried
+        # the advice, and died identically.
+        #
+        # The bound is EXACT in the direction it is used, and only that direction. The anchors are
+        # drawn only from the named regions the seed kept, and generate_early force-keeps as many
+        # named regions as `start_regions` is short by, so the seatable set is at most `named`;
+        # asking for more anchors than `named` holds is therefore unsatisfiable, and this never
+        # refuses a seed that would have generated. The CONVERSE does not hold -- a named region
+        # with zero emitted checks still cannot anchor, and this cannot see that -- which is why
+        # the ValueError in start_grace stays as the backstop rather than being replaced by this.
+        _sr = getattr(self.options, "start_regions", None)
+        n_start = max(1, int(_sr.value)) if _sr is not None else 1
+        if n_start > len(named):
+            raise OptionError(
+                "[eldenring] start_regions asks for %d starting regions, but start_region_pool "
+                "names only %d region(s) (%s) and the run may open ONLY in the regions you named. "
+                "Raising num_regions cannot fix this -- start_region_pool narrows the pool before "
+                "the anchors are drawn, so a bigger seed just adds regions this option removes "
+                "again. Name at least %d region(s) in start_region_pool, or lower start_regions "
+                "to %d." % (n_start, len(named), ", ".join(sorted(named)), n_start, len(named)))
+        return frozenset(named)
+
+    def _eligible_regions(self) -> List[str]:
+        """The region pool num_regions draws from this seed, after the DLC toggles.
+        dlc_only -> DLC regions only (implies DLC enabled). enable_dlc off -> base game only.
+        both default -> everything. Never empty: the fallbacks below guarantee a non-empty pool so
+        compute_kept always has something to keep and the seed stays winnable."""
+        dlc_only = bool(getattr(self.options, "dlc_only", None) and self.options.dlc_only.value)
+        enable_dlc = bool(getattr(self.options, "enable_dlc", None) is None
+                          or self.options.enable_dlc.value)
+        if dlc_only:
+            pool = dlc_regions()          # DLC only (implies enabled)
+            # Base-game-only NPC content is sealed with the base game and does NOT reappear even when
+            # that NPC's story continues into the DLC. E.g. Brother Corhyn: his only pooled check is
+            # Corhyn's Bell Bearing (flag 400370, m11_05 ashen Leyndell -- a base region), so dlc_only
+            # drops it and no DLC-side Corhyn check exists to keep. Intended (Alaric 2026-07-21), not a
+            # coverage gap; documented here because "why did Corhyn vanish?" is a natural dlc_only Q.
+        elif enable_dlc:
+            pool = list(REGIONS)          # base + DLC (default)
+        else:
+            pool = base_regions()         # base only
+
+        # REGIONS WITH NO MEASURED KICK GEOMETRY ARE NOT ELIGIBLE (2026-07-13).
+        #
+        # A region whose play_region buckets we have not measured CANNOT have its lock enforced: the
+        # client's kick is permissive on ground it has no entry for, so you would simply walk into the
+        # sealed region and loot it. features/area_locks raises a ContractError rather than emit such a
+        # seed -- correctly -- so the choice is not "ship it broken or not", it is "exclude it or fail
+        # to generate at all".
+        #
+        # Excluding costs those regions' content this seed. Keeping them would ship a lock that does
+        # nothing, which is precisely the bug (Weeping, and the whole DLC) that region_groups.py's
+        # measured table exists to end. So: exclude, and SAY SO -- a shrinking region pool that nobody
+        # announced is how you end up debugging the fill instead of the cause.
+        # Generated into eldenring/tables/region_play_ids.py by gen_data (from region_groups), read
+        # off the loaded table set: an apworld generated before this existed has an empty pending set.
+        _pending_set = TABLES.regions_pending_bucket
+        # ONLY when region LOCKING is on. num_regions 0 = every region in play and NOTHING is locked,
+        # so there is no kick to enforce and no reason to drop anything -- excluding regions there would
+        # just delete 67 checks and make a "full" seed not full (which is exactly what the count-neutral
+        # and DLC tests caught). The geometry only has to exist for a region whose lock must FIRE.
+        n_regions = getattr(self.options, "num_regions", None)
+        locking = bool(n_regions is not None and int(n_regions.value) > 0)
+        pending = [r for r in pool if r in _pending_set] if locking else []
+        if pending:
+            logging.getLogger("Greenfield").warning(
+                "[eldenring:%s] region(s) EXCLUDED from this seed -- their play_region buckets are not "
+                "measured yet, so their locks could not be enforced: %s. Measure the bucket (warp to one "
+                "of the region's graces and read the client's kick-watch line), move it into "
+                "region_groups.PLAY_REGION_GROUPS, and drop it from REGIONS_PENDING_BUCKET.",
+                self.player, ", ".join(sorted(pending)))
+            pool = [r for r in pool if r not in _pending_set]
+
+        return pool if pool else list(REGIONS)  # defensive: never seal every region
+
+    def generate_early(self) -> None:
+        # Frozen behaviour first: features read the removed knobs exactly as before (defaults.py).
+        apply_frozen(self.options)
+        from .features.bingo import active as _bingo_active
+        if _bingo_active(self):
+            # Keep existing region-lock consumers enabled even if the ignored Num Regions is zero.
+            self.options.num_regions.value = self.options.bingo_region_limit.value
+        # progression_sharing resolves onto the two hidden knobs it governs before anything reads them.
+        _ps.apply_progression_sharing(self.options)
+        # multiworld_scope: surface overrides keep_local / filler_foreign_pct / confine share, and
+        # must do so before the feature loop reads them (features/multiworld_scope.py).
+        self.gf_multiworld_scope_overrides = _mws.apply_multiworld_scope(self)
+        # ...then vanilla_placement takes the start loadout back off, and it has to happen HERE:
+        # between apply_frozen (which installs the frozen ON values) and the feature loop at the end
+        # of this method (where start_items/start_grace first read them). A guard inside those
+        # features would work today and rot the moment a tenth consumer is added.
+        self.gf_vanilla_start_off = (
+            _vp.apply_vanilla_start(self) if _vp.is_on(self) else [])
+        self.gf_eligible: List[str] = self._eligible_regions()
+        # DLC-off seeds must not receive DLC items as juice/filler; Tarnished Pack items (#1096)
+        # require their separate default-off ownership toggle. pool_excluded_names publishes both
+        # so every pool-augmentation feature reads the same resolved decision. (The attribute keeps
+        # its `gf_dlc_excluded` name -- every consumer already reads it -- but it also carries the
+        # option-dependent Tarnished-Pack names resolved from their verified FullIDs.)
+        self.gf_dlc_on: bool = self._dlc_on()
+        self.gf_tarnished_pack_on = bool(
+            getattr(self.options, "enable_tarnished_pack", None)
+            and self.options.enable_tarnished_pack.value)
+        dlc_excluded = DLC_ITEM_NAMES
+        if getattr(getattr(self.options, "enable_dlc_gear", None), "value", False):
+            # Admit equipment only. In particular, DLC keys and blessing fragments must not
+            # become eligible simply because a base-game player wants the DLC weapon roster.
+            gear_categories = {"weapons", "armor", "talismans", "ashes", "spells",
+                               "spirit_ashes", "crystal_tears"}
+            dlc_excluded = {name for name in DLC_ITEM_NAMES
+                            if item_categories.category_of(name) not in gear_categories}
+        self.gf_dlc_excluded = pool_excluded_names(
+            self.gf_dlc_on, dlc_excluded, ITEM_CATALOG, self.gf_tarnished_pack_on)
+        # natural_progression is the INVERSE of num_regions (the whole eligible map is in play, gated
+        # by real vanilla keys), so it forces the full eligible pool -- num_regions is ignored here.
+        # vanilla_placement also forces the full eligible pool: it lets the BASE GAME's doors do
+        # the gating, so a drawn subset would seal regions vanilla expects you to walk into.
+        _nr = 0 if (_np.is_on(self) or _vp.is_on(self)) else int(self.options.num_regions.value)
+        self.gf_goal_choice: str = self._resolve_goal_choice()
+        _draw_parts: Dict[str, List[str]] = {}
+        # THE DLC TERMINUS (2026-08-09). The base game's ending is guaranteed by the Ashen
+        # Capital not being a rollable region; the DLC's ending had no such guarantee, so a
+        # dlc_only seed ended on Promised Consort Radahn only when the draw happened to take Enir
+        # Ilim. It now rides the SAME force-keep seam a named goal uses, and is BARRED from the
+        # draw so the force is additive -- see features/goal_locations.DLC_TERMINUS_REGION.
+        _auto_forced = _gl.auto_forced_regions(self.gf_eligible)
+        # Published for features/goal_locations (tier 0b) exactly as gf_finale_active is published
+        # for tier 0: the answer is derived from the ELIGIBLE pool, and re-deriving it downstream
+        # from the KEPT set is how two answers to one question get shipped.
+        self.gf_dlc_terminus: bool = bool(_auto_forced)
+        # ...and the same set bars the START ANCHOR (create_items). THE REGIONS THIS SEED'S GOAL
+        # NEEDS ARE THE REGIONS IT MAY NOT OPEN ON -- one rule, both halves of `goal`, rather than
+        # the hardcoded GOAL_REGION the extras bar has carried since 2026-08-06.
+        # dict.fromkeys, not a set: `promised_consort` already names Enir Ilim, and the order the
+        # regions are forced in must stay deterministic for the telemetry line below.
+        _forced = tuple(dict.fromkeys(
+            tuple(_gl.forced_regions(self.gf_goal_choice)) + tuple(_auto_forced)))
+        self.gf_goal_forced: tuple = _forced
+        # Extra boss regions must exist, but may still be opening regions. Only the
+        # selected finale belongs to the start-anchor exclusion above.
+        _forced = tuple(dict.fromkeys(_forced + _gl.required_boss_regions(self)))
+        # START REGION POOL (features/start_grace.StartRegionPool). The player named the regions the
+        # run MAY open in. It is a set of CANDIDATES for the opening region(s), not a set of regions
+        # to keep: the draw runs as it always does, and only if it kept fewer than `start_regions`
+        # of the named regions are the missing ones force-kept (chosen from the pool, additive like
+        # a goal's, #409). Until 2026-09-19 every named region was force-kept, so a 25-name pool
+        # kept 25 regions whatever `num_regions` said (255, seed 19945568586154303638).
+        # Validated HERE and not at the anchor pick, because this is the only place the DLC toggles,
+        # the goal's own force-keeps and the gated children are all resolved: an error raised later
+        # could only say "no region can open this run" without saying WHICH name was the problem.
+        _named_pool: frozenset = self._resolve_start_region_pool()
+
+        from .features.bingo import active as _bingo_active, draw_regions as _bingo_draw
+        _bingo_kept = None
+        if _bingo_active(self):
+            _bingo_kept = _bingo_draw(self, _named_pool)
+            self.gf_goal_forced = _forced = ()
+            self.gf_dlc_terminus = False
+            _auto_forced = ()
+            _draw_parts["drawn"] = list(_bingo_kept)
+
+        def _draw_kept(forced):
+            if _bingo_kept is not None:
+                return list(_bingo_kept)
+            return compute_kept(
+                _nr,
+                self.random,
+                self.gf_eligible,
+                forced=forced,
+                parts=_draw_parts,
+                bar_from_draw=_auto_forced,
+                order=self.options.num_regions_order.current_key,
+            )
+
+        _rng_before_draw = self.random.getstate()
+        self.gf_kept: List[str] = _draw_kept(_forced)
+        _pool_forced: tuple = ()
+        if _named_pool:
+            _sr = getattr(self.options, "start_regions", None)
+            _n_start = max(1, int(_sr.value)) if _sr is not None else 1
+            _short = _n_start - sum(1 for r in self.gf_kept if r in _named_pool)
+            if _short > 0:
+                # `_resolve_start_region_pool` guarantees len(named) >= start_regions, so the
+                # unkept names always cover the shortfall. Redraw from the SAME rng state with the
+                # extras forced, so the kept set is one consistent draw (closure, order) rather than
+                # a patched one.
+                _pool_forced = tuple(sorted(
+                    self.random.sample(sorted(_named_pool - set(self.gf_kept)), _short)))
+                self.random.setstate(_rng_before_draw)
+                self.gf_kept = _draw_kept(tuple(dict.fromkeys(_forced + _pool_forced)))
+        # What the anchor pick may open on: the named regions this seed actually kept.
+        self.gf_start_pool: frozenset = frozenset(r for r in self.gf_kept if r in _named_pool)
+        # #409: SAY WHAT THE NUMBER DID. `num_regions` is a DRAW SIZE -- a named goal force-keeps
+        # its own regions and every kept region pulls its parents in -- so the seed can contain more
+        # regions than the yaml asked for. That is correct and deliberate (#402), and it read as a
+        # bug to the player who hit it: `num_regions: 1` gave him four and he spent an hour asking
+        # why. One line in the gen log, naming all three contributions, is the whole fix.
+        logging.getLogger("Greenfield").info(
+            "[eldenring:%s] %s", self.player,
+            describe_kept(_nr, _draw_parts, self.gf_kept, self.gf_goal_choice,
+                          start_region_pool=frozenset(_pool_forced)))
+        # Resolve the Great-Rune goal now (once), so create_item/set_rules/slot_data agree.
+        self.gf_required_runes: List[str] = self._resolve_required_runes()
+        self._lint_goal_gate()
+        self._lint_goal_reachability()
+        for f in _FEATURES:
+            f.generate_early(self)
+        from .features.bingo import prepare as _prepare_bingo
+        _prepare_bingo(self)
+        # AFTER the feature loop, not beside `_lint_goal_reachability`: the anchor capacity counts
+        # each kept region's emitted checks through `_seed_locations`, whose cross-region filter
+        # reads feature state (mario_mode, the sweep membership) that the loop above settles.
+        self._lint_start_anchor_capacity()
+
+    def _lint_goal_gate(self) -> None:
+        """Refuse, AT GENERATION, a seed whose ending has NO gate at all (#1652).
+
+        The withheld goal region opens on exactly three terms (`create_regions`, mirrored by
+        `er_logic::goal_gate` on the client): the region requirement from
+        `goal_region_unlock_policy`, the Great Rune count, and the required Ability Unlocks. With
+        all three empty the entrance rule is `has_all(())` and 0 runes -- always true -- so the goal
+        region and every check in it land in sphere 0, no goal Lock is minted, and the client opens
+        the region on connect. The player can warp to the final boss and finish. Logic and client
+        AGREE on that, so nothing downstream ever notices: it generates silently.
+
+        Seen in the wild on 0.6.1.7: `ending_condition: region_locks` (an old yaml, written when
+        the policy default was items_held) with the new default `goal_region_unlock_policy: none`.
+        Also reachable as `great_runes` with zero eligible runes (item_shuffle off).
+
+        🛑 AN ERROR, NOT A COERCION. The yaml asks for an ending with no requirement, which cannot
+        be honoured, and the two repairs are different games -- items_held is a region hunt,
+        great_runes is a rune hunt. Picking one on the player's behalf is the "I set my options and
+        the game ignored them" class `goal` already refuses (see `_resolve_goal_choice`). The
+        message names both options and both ways out.
+
+        Exempt: bingo (its own goal), natural_progression / vanilla_placement (no withheld Lock --
+        the base game's own doors gate the ending region), `regions_completed` (gated on checked
+        locations), and Additional Required Bosses (the run cannot end before those kills)."""
+        from .features.bingo import active as _bingo_active
+        if _bingo_active(self) or _np.is_on(self) or _vp.is_on(self):
+            return
+        if self._goal_region_policy() != _ps.GoalRegionUnlockPolicy.option_none:
+            return
+        if self._great_runes_required_count() > 0 or self._required_ability_unlocks():
+            return
+        if _gl.required_boss_specs(self):
+            return
+        ec = getattr(self.options, "ending_condition", None)
+        ending = ec.current_key if ec is not None else "?"
+        why = ("ending_condition: region_locks requires no Great Runes"
+               if ending != "great_runes" else
+               "ending_condition: great_runes found no eligible Great Runes "
+               "(they are only in the pool with item_shuffle on)")
+        raise OptionError(
+            "[eldenring] this seed's ending has no requirement: %s, and "
+            "goal_region_unlock_policy: none requires no Region Locks, so the final boss's region "
+            "would open the moment you connect. Set ending_condition: great_runes (with "
+            "item_shuffle on) or goal_region_unlock_policy: items_held (the old region_locks "
+            "ending) or regions_completed." % why)
+
+    def _lint_goal_reachability(self) -> None:
+        """Refuse, AT GENERATION, a seed whose goal is already complete when the player connects.
+
+        🛑 THIS IS A YAML LINT AND IT BELONGS HERE, NOT IN `create_items`. It lived there until
+        2026-08-16 and fired halfway through minting a pool -- after the draw, the parent closure,
+        the anchor pick and every feature's `generate_early`, all of which is work thrown away to
+        report a yaml the player could have been told about immediately. Every input it reads (the
+        kept set, the required runes, `start_regions`) is final at this point in `generate_early`,
+        so the combination can be judged before any of that runs. Alaric, 2026-08-16: "yaml lint
+        it, fail at gen".
+
+        THE PROPERTY: at least one progression item the goal needs must stay in the pool. The goal
+        is `has_all(kept locks)` plus a rune count; precollect every one of them and the seed is
+        already won at connect, having been played zero times.
+
+        It is checked against the KEPT COUNT, NOT the yaml's `num_regions`. num_regions is a DRAW
+        SIZE (#409) -- each kept region pulls its parents in -- so a seed can hold more regions
+        than were asked for, never fewer. An unsatisfiable yaml dies naming both numbers.
+
+        ⭐ WHAT COUNTS CHANGED ON 2026-08-16 (#768). The Ashen Capital Lock used to be minted into
+        the pool, and counted here. It is now withheld and granted by the client once every other
+        goal item is held (client#245, `er_logic::goal_gate`), so it is no longer something the
+        seed can offer a player to find. The REQUIRED GREAT RUNES count in its place: they are
+        progression, they are in the pool, and the goal cannot be met without them -- exactly the
+        property this is testing for. Since #765 all seven are in every seed, so a `great_runes`
+        seed always has something left to find however small the draw.
+
+        🛑 AND THAT COSTS `num_regions: 1` ITS DEFAULT ENDING, WHICH IS A REAL BEHAVIOUR CHANGE,
+        NOT A TEST DETAIL. Such a seed keeps one region, its single Lock is the frozen start
+        anchor, and with the Ashen Lock withheld there is nothing else the goal wants -- so it is
+        refused where it used to generate. It used to generate because the Ashen Lock WAS the
+        hunt: one item to find, in the one region you kept. Losing it makes the seed genuinely
+        empty rather than merely small, which is why refusing is right -- "one region seed is
+        trivial i think that's legit" (Alaric, 2026-08-16) -- but the seed did not become trivial
+        on its own, #768 made it so, and the error has to name the levers that get the player out.
+        """
+        from .features.bingo import active as _bingo_active
+        if _bingo_active(self):
+            return
+        # A rune requirement always leaves progression to find. `none` with no other requirement is
+        # refused by `_lint_goal_gate` (#1652), while `regions_completed` is gated by checked
+        # locations rather than items that can be precollected. This lint only owns the legacy
+        # held-lock policy.
+        if self._required_runes() or not self._goal_requires_held_locks():
+            return
+        # natural_progression and vanilla_placement mint no synthetic locks at all: the base
+        # game's own doors gate those seeds, so there is no precollected key to complete anything.
+        if _np.is_on(self) or _vp.is_on(self):
+            return
+        _slr = getattr(self.options, "start_with_region_lock", None)
+        if _slr is None or not _slr.value:
+            return                      # nothing is precollected, so nothing is held at connect
+        locks = self.kept_lock_names()
+        if not locks:
+            return
+        runes = list(self._required_runes())
+        n_start = 1
+        _sr = getattr(self.options, "start_regions", None)
+        if _sr is not None:
+            n_start = max(1, int(_sr.value))
+        minted = len(locks) + len(runes)
+        if n_start < minted:
+            return
+        raise OptionError(
+            "[eldenring] start_regions: %d starting regions were asked for, but this seed "
+            "minted only %d progression item(s) the goal needs (%d kept region(s)%s) and at "
+            "least one must stay in the pool or the goal is already complete at connect. "
+            "Lower start_regions, raise num_regions, or set ending_condition: great_runes "
+            "so the required runes give the seed something to find."
+            % (n_start, minted, len(locks),
+               " + %d required Great Rune(s)" % len(runes) if runes else ""))
+
+    def _anchor_pick_inputs(self, kept) -> Dict[str, object]:
+        """Everything `pick_anchor_regions` is handed except the rng and the MajorBoss bias.
+
+        ONE place, because two methods read it: `create_items` draws the anchors from it and
+        `_lint_start_anchor_capacity` counts them from it in generate_early (#1654). A lint that
+        assembled its own copy of `gated` / `never_anchor` / `only` would be a second answer to
+        "how many regions can open this run?", and the first time they disagreed the fuzz would
+        find a seed the lint passed and the draw still died on."""
+        _sr = getattr(self.options, "start_regions", None)
+        return {
+            "n": max(1, int(_sr.value)) if _sr is not None else 1,
+            "check_counts": {r: len(self._seed_locations(r)) for r in kept},
+            "only": getattr(self, "gf_bingo_anchor_pool",
+                            getattr(self, "gf_start_pool", frozenset())),
+            "gated": frozenset(REGION_PARENT),
+            "never_extra": frozenset({GOAL_REGION}),
+            "never_anchor": frozenset(getattr(self, "gf_goal_forced", ())),
+        }
+
+    def _lint_start_anchor_capacity(self) -> None:
+        """Refuse, AT GENERATION, a `start_regions` this seed cannot seat (#1654).
+
+        The anchors are drawn in `create_items` from the kept regions minus the gated children,
+        the regions the goal force-kept, the goal region and any region with zero emitted checks
+        (narrowed to `start_region_pool` when one is named). Every one of those inputs is final
+        once generate_early has run, so the count is known here -- and reached in create_items
+        instead, the shortfall was a bare ValueError out of `start_grace.pick_anchor_regions`: a
+        traceback, where the fuzz contract (CONTRIBUTING headline) promises an OptionError. Fuzz
+        seed 1652 #0019 hit exactly that with `start_regions: 9` against 6 seatable regions.
+
+        The bound is EXACT, not conservative: `anchor_candidates` is the very list the picker draws
+        its extras from, and its first draw always lands inside it (see that docstring), so this
+        refuses precisely the seeds the draw would have died on and no others. The ValueError in
+        start_grace stays as the backstop it was always described as.
+
+        `start_region_pool`'s own count check (#690, `_resolve_start_region_pool`) fires first and
+        names the pool; this one sees what that one cannot -- named regions the draw did not keep,
+        gated, goal-forced or check-less ones -- and the advice follows the same rule: under a pool,
+        raising num_regions cannot help, because the pool narrows the draw before the anchors."""
+        from .features.bingo import active as _bingo_active
+        if _np.is_on(self) or _vp.is_on(self) or _bingo_active(self):
+            return                      # no synthetic Lock is minted, so nothing is anchored
+        _slr = getattr(self.options, "start_with_region_lock", None)
+        if _slr is None or not _slr.value or not self.kept_lock_names():
+            return                      # mirrors the create_items guard around the anchor pick
+        from .features.start_grace import anchor_candidates
+        kept = self._kept()
+        inputs = self._anchor_pick_inputs(kept)
+        n_start = int(inputs["n"])
+        if n_start <= 1:
+            return                      # one anchor is the default draw; its own errors are data bugs
+        seatable = anchor_candidates(
+            kept, inputs["check_counts"], gated=inputs["gated"],
+            never_extra=inputs["never_extra"], never_anchor=inputs["never_anchor"],
+            only=inputs["only"])
+        if n_start <= max(1, len(seatable)):
+            return
+        _fix = ("name more regions in start_region_pool, or lower start_regions to %d"
+                % max(1, len(seatable)) if inputs["only"]
+                else "lower start_regions to %d or raise num_regions" % max(1, len(seatable)))
+        raise OptionError(
+            "[eldenring] start_regions asks for %d starting regions, but only %d of this seed's "
+            "%d kept region(s) can open a run (%s). Gated child regions, the regions the goal "
+            "(%s) needs, and regions with no checks this seed can never be a starting region. "
+            "Fix: %s."
+            % (n_start, len(seatable), len(kept), ", ".join(seatable) or "none",
+               self.gf_goal_choice, _fix))
+
+    def withheld_goal_lock(self) -> Optional[str]:
+        """The kept region's Lock this seed withholds, or None.
+
+        🛑 #768 SHIPPED THIS FOR ONE GOAL WHEN THERE WERE TWO. The Ashen Capital is never a KEPT
+        region -- it hangs off the hub behind a synthetic lock -- so dropping that one lock covered
+        `elden_beast` completely and `promised_consort` not at all. Named goals can also use kept
+        regions now (`promised_consort` -> Enir Ilim, `malenia` -> Haligtree), and their Locks are
+        ordinary kept-region Locks that fill could otherwise put in sphere 1: the ending would be
+        reachable before the run exactly as it was before #768.
+
+        The DLC terminus only got its guarantee on 2026-08-09, after bobler finished a seed on
+        Romina by lottery, so "the base-game case is the real one" is not a defence -- that ending
+        is reachable on purpose now.
+
+        ⭐ THE CLIENT ALREADY GENERALISED; ONLY THIS SIDE WAS PINNED. `tracker_tables::
+        goal_lock_item` resolves the withheld item from `goalLocations` -> coarse region key ->
+        that region's lock item, so it names Enir Ilim's Lock on a `promised_consort` seed without
+        being told. No contract change and no client change: the world simply stops minting the
+        item the client was already prepared to grant."""
+        from .features.bingo import active as _bingo_active
+        if _bingo_active(self) or _np.is_on(self) or _vp.is_on(self):
+            return None                 # these modes do not withhold a terminal region lock
+        choice = getattr(self, "gf_goal_choice", None)
+        region = _gl.goal_region(choice)
+        if region is None or region not in self._kept():
+            return None                 # `elden_beast`: the Ashen Capital is never kept -> None
+        return f"{region} Lock"
+
+    def kept_lock_names(self) -> List[str]:
+        """The Region Lock item names this seed's completion requires -- THE single source.
+
+        `set_rules` closes its `has_all` over exactly this list and `features/goal_locations`
+        emits `goalRequiredItems` from it, so the AP-side completion condition and the client-side
+        Goal gate can never drift apart again. Empty under natural_progression, which mints no
+        Lock items."""
+        if _np.is_on(self) or _vp.is_on(self):
+            return []
+        # ⭐ THE ASHEN LOCK LEFT THIS LIST ON 2026-08-16 (#768), and the comment it replaces had
+        # already called it "strictly REDUNDANT -- you cannot kill either goal boss without it,
+        # because its entrance is the only way in". It rode along anyway so that AP's
+        # completion_condition and the client's goalRequiredItems would read ONE list.
+        #
+        # It is now not merely redundant but UNSATISFIABLE: the Lock is no longer minted into the
+        # pool at all. The client grants the goal region's flags itself once every other goal item
+        # is held (client#245, er_logic::goal_gate), so the item is never sent -- and an item that
+        # is never sent cannot be required of the player by either terminal condition. Leaving it
+        # here would have made `has_all` false forever: an unwinnable seed, and a FillError before
+        # that.
+        #
+        # 🛑 ONE LIST, STILL. Removing it HERE rather than filtering it in one of the two consumers
+        # is the whole point -- the 2026-07-30 alignment exists because those two drifted once, and
+        # a filter in one of them is how they would drift again. `region_open_flags` still carries
+        # `Ashen Capital Lock -> open flag` (built separately, below), because that mapping is how
+        # the client resolves WHICH flag to set; it is a name->flag lookup, not a requirement.
+        # ...and the same withholding, for the goal that keeps its own region (see
+        # `withheld_goal_lock`). ONE LIST STILL: dropped HERE, not filtered in a consumer.
+        _withheld = self.withheld_goal_lock()
+        out = [f"{r} Lock" for r in self._kept() if f"{r} Lock" != _withheld]
+        return out
+
+    def goal_required_lock_names(self) -> List[str]:
+        """Held Region Locks required by the selected goal-region policy.
+
+        ``none`` and ``regions_completed`` return no items: the former has no region axis and the
+        latter is enforced from checked locations by the client. ``items_held`` returns
+        `kept_lock_names` minus the precollected start anchor.
+
+        The anchor lock is pushed via `push_precollected` and leaves the pool, so requiring the
+        player to "hold" it would be requiring an item that is never sent. Excluding it here also
+        makes the emission robust to the one thing I could not verify from the sandbox -- whether a
+        precollected item shows up in ReceivedItems -- because the answer no longer matters."""
+        if not self._goal_requires_held_locks():
+            return []
+        free = {i.name for i in self.multiworld.precollected_items.get(self.player, ())}
+        return [n for n in self.kept_lock_names() if n not in free]
+
+    def _goal_region_policy(self) -> int:
+        option = getattr(self.options, "goal_region_unlock_policy", None)
+        return int(getattr(option, "value", option or 0))
+
+    def _goal_requires_held_locks(self) -> bool:
+        return self._goal_region_policy() == _ps.GoalRegionUnlockPolicy.option_items_held
+
+    def _resolve_goal_choice(self) -> str:
+        """The `goal` option value, VALIDATED against this seed's eligible region pool.
+
+        A named goal whose region the DLC toggles have removed from play is an unsatisfiable yaml,
+        and this is where it dies -- loudly, at generation, naming the conflicting toggle. The
+        alternative (fall back to the ladder) is exactly the "I set my goal and the game ignored
+        it" class this project has shipped before. `auto` skips all of it."""
+        opt = getattr(self.options, "goal", None)
+        chosen = opt.current_key if opt is not None else "auto"
+        if chosen == "auto":
+            return "auto"
+        need = _gl.forced_regions(chosen)
+        # 🛑 THE VACUOUS-QUANTIFIER GUARD (SPEC-ashen-capital-lock). `elden_beast` forces NOTHING
+        # now, so the `missing` quantifier below is over an EMPTY tuple and passes for free -- it
+        # would happily pin the Ashen Capital under `dlc_only`, where the base game is sealed and
+        # features/finale.py builds no such region, and the seed would die later with a KeyError
+        # out of AP's region cache instead of here with an actionable message. A named goal whose
+        # region cannot be BUILT is the same unsatisfiable yaml as one whose region was toggled
+        # away, so it dies in the same place, by an explicit test rather than a quantifier.
+        _region = _gl.goal_region(chosen)
+        if _region == FINALE_REGION and not _finale.base_game_in_play(self.gf_eligible):
+            raise OptionError(
+                "goal: %s ends on %s, which is base-game content -- and this seed's options "
+                "sealed the base game (dlc_only=%s). Pick goal: auto or goal: promised_consort, "
+                "or turn dlc_only off. A named goal is never silently downgraded."
+                % (chosen, _region,
+                   getattr(getattr(self.options, "dlc_only", None), "value", "?")))
+        missing = [r for r in need if r not in set(self.gf_eligible)]
+        if missing:
+            raise OptionError(
+                "goal: %s needs region(s) %s, which this seed's options removed from play "
+                "(enable_dlc=%s, dlc_only=%s). Pick goal: auto, or turn the region scope back on -- "
+                "a named goal is never silently downgraded."
+                % (chosen, ", ".join(sorted(missing)),
+                   getattr(getattr(self.options, "enable_dlc", None), "value", "?"),
+                   getattr(getattr(self.options, "dlc_only", None), "value", "?")))
+        logging.getLogger("Greenfield").info(
+            "[eldenring:%s] goal ARMED: %s -> region %s (forcing %s kept)", self.player, chosen,
+            _region, "+".join(need))
+        return chosen
+
+    def _kept(self) -> List[str]:
+        return getattr(self, "gf_kept", list(REGIONS))
+
+    # ---- ending goal (great runes) --------------------------------------------
+    def _shuffle_on(self) -> bool:
+        return bool(getattr(self.options, "item_shuffle", None) and self.options.item_shuffle.value)
+
+    def _runes_on_kept_regions(self) -> List[str]:
+        """Great Rune NAMES sitting on a kept region's own boss this seed -- what the DRAW supplies.
+
+        This is what `_available_runes` used to be and no longer is. Renamed rather than kept as an
+        alias, because the two questions gave the same answer for months and the moment they stopped
+        (#764) every caller had to be re-read to see which one it actually wanted."""
+        if not self._shuffle_on() or not GREAT_RUNES:
+            return []
+        seen: Dict[str, None] = {}
+        for rn in self._kept():
+            for (_n, ap_id, _flag) in self._seed_locations(rn):
+                nm = LOCATION_ITEM.get(ap_id)
+                if nm in GREAT_RUNES and nm not in seen:
+                    seen[nm] = None
+        return list(seen)
+
+    def _available_runes(self) -> List[str]:
+        """Great Rune NAMES that will be IN THE POOL this seed -- which is now ALL SEVEN (#764).
+
+        🛑 IT USED TO MEAN "the ones the draw kept", and that is the defect, not the wording.
+        A Great Rune sits on exactly one region's boss, so the count was whatever the draw happened
+        to keep -- and every consumer clamped to it silently. bobler's seed 75791261719639771134:
+        three regions, ONE rune in the whole multiworld, `goal_great_runes: 2` resolved to a
+        one-item requirement, nothing said so.
+
+        `features/great_runes` now mints every rune the draw did not supply, so the pool always
+        holds seven and this returns seven. The clamp in `_resolve_required_runes` therefore cannot
+        bite (#504), and `goal_great_runes`'s 1-7 range means what it says on every seed.
+
+        Still empty when shuffle is off: with no real-item pool there is nothing to place, and the
+        goal is not a rune goal either."""
+        if not self._shuffle_on() or not GREAT_RUNES:
+            return []
+        return sorted(GREAT_RUNES)
+
+    def _resolve_required_runes(self) -> List[str]:
+        """The full set of Great Rune names eligible for the ending. Empty unless the goal is
+        great_runes AND shuffle is on. Completion requires the configured COUNT from this set; it
+        never requires a seed-selected named subset (#813)."""
+        ec = getattr(self.options, "ending_condition", None)
+        if ec is None or ec.current_key != "great_runes":
+            return []
+        return sorted(self._available_runes())
+
+    def _required_runes(self) -> List[str]:
+        return getattr(self, "gf_required_runes", [])
+
+    def _required_ability_unlocks(self) -> List[str]:
+        """Pooled 'Unlock: X' names this seed's goal requires held (progressive + ability_unlocks_required).
+
+        The single source both terminal conditions read -- upgraded to progression by _class_for, ANDed
+        into completion_condition below, and appended to goalRequiredItems by features/goal_locations.
+        Empty in static mode, with no locks, or when the requirement is opted out."""
+        from .features.ability_lock import _required_unlock_names
+        return _required_unlock_names(self)
+
+    def _great_runes_required_count(self) -> int:
+        """Effective number of distinct eligible Great Runes needed for completion."""
+        eligible = self._required_runes()
+        if not eligible:
+            return 0
+        want = int(getattr(self.options, "goal_great_runes").value)
+        return min(max(want, 0), len(eligible))
+
+    # ---- items ----------------------------------------------------------------
+    def _class_for(self, name: str) -> ItemClassification:
+        """Classification for an item, upgrading a required Great Rune to progression so AP fill
+        guarantees it lands in a reachable location (Great Runes are GOODS -> filler by default)."""
+        base = _item_class.get(name, ItemClassification.filler)
+        # A required Great Rune (great_runes ending), a capital-wall rune in natural_progression
+        # mode (features/natural_progression.py publishes world.gf_capital_runes -- the only mode
+        # left with a rune wall since the 2026-09-14 Leyndell retirement),
+        # or a legacy-dungeon key (features/legacy_key_gates.py, e.g. Academy Glintstone Key) must be
+        # progression so AP fill guarantees it reachable (all are GOODS -> filler by default).
+        if (name in self._required_runes() or name in getattr(self, "gf_capital_runes", [])
+                or name in getattr(self, "gf_legacy_keys", [])
+                or name in getattr(self, "gf_questline_gate_items", [])
+                or name in getattr(self, "gf_mario_quest_items", [])
+                or name in getattr(self, "gf_natural_keys", [])
+                or name in self._required_ability_unlocks()):
+            return ItemClassification.progression
+        # 🛑 AND A GREAT RUNE IS NEVER FILLER, EVEN WHEN THIS SEED'S GOAL DOES NOT WANT IT (#640).
+        # Great Runes are GOODS, so `_item_class` defaults them to filler, and the branch above only
+        # rescues the ones some gate happens to name. That was survivable while the pool held only
+        # the runes the draw kept; now that all seven are always present (#764) it would put up to
+        # seven runes in the pool labelled junk -- eligible for the filler tail, and read by every
+        # consumer that treats filler as "safe to discard".
+        # Raise only from filler: never DOWNgrade something a category rule already called useful.
+        if name in GREAT_RUNES and base == ItemClassification.filler:
+            return ItemClassification.useful
+        # A Talisman Pouch is three permanent talisman slots in total -- build power, not junk
+        # (Alaric, 2026-09-19). It is a GOOD, so its category defaults it to filler; promote by name,
+        # raise-only, and it covers the vanilla copies and presence_floor's injected ones alike
+        # because both come through here.
+        if name == "Talisman Pouch" and base == ItemClassification.filler:
+            return ItemClassification.useful
+        return base
+
+    def create_item(self, name: str) -> GFItem:
+        return GFItem(name, self._class_for(name),
+                      self.item_name_to_id[name], self.player)
+
+    def _pick_filler(self) -> str:
+        """Varied real-junk filler (greases/boluses/butterflies/...) when varied_filler is on and the
+        pool resolved; else the monotone Rune. All FILLER_POOL items are ITEM_CATALOG goods (registered,
+        filler-classified, client-grantable), so this is count-neutral and fill-safe. Deterministic."""
+        vf = getattr(self.options, "varied_filler", None)
+        if vf is not None and vf.value and FILLER_POOL:
+            _excl = getattr(self, "gf_dlc_excluded", ())
+            _pool = [x for x in FILLER_POOL if x not in _excl] if _excl else FILLER_POOL
+            if _pool:
+                # B: over-weight smithing/somber upgrade stones when filler_upgrade_weight > 1, so the
+                # measured standard-weapon starvation can be tuned away (count-neutral -- only WHICH
+                # filler item is chosen). Uniform when weight == 1 (default).
+                _w = getattr(self.options, "filler_upgrade_weight", None)
+                _wt = int(_w.value) if _w is not None else 1
+                if _wt > 1:
+                    _weights = [_wt if "Smithing Stone" in x else 1 for x in _pool]
+                    return self.random.choices(_pool, weights=_weights, k=1)[0]
+                return self.random.choice(_pool)
+        return FILLER
+
+    def get_filler_item_name(self) -> str:
+        return self._pick_filler()
+
+    def create_items(self) -> None:
+        kept = self._kept()
+        # natural_progression = ZERO synthetic locks: regions open on their real vanilla keys (already
+        # in the pool via item_shuffle), so no "<Region> Lock" item is minted and no start anchor is
+        # precollected -- the start regions (Limgrave/Weeping) open off the hub with no key.
+        _natural = _np.is_on(self)
+        # vanilla_placement mints no locks for the same reason natural_progression does not: the
+        # base game's own doors gate this seed, so a synthetic lock would gate it TWICE.
+        _vanilla = _vp.is_on(self)
+        _nolocks = _natural or _vanilla or _bingo_active(self)
+        # `kept_lock_names` is THE list of locks this seed mints -- it already drops the goal
+        # region's own Lock (#768 for the Ashen Capital, and the DLC terminus alongside it), so
+        # minting from it keeps the pool and the goal reading the same source.
+        lock_items: List[Item] = ([] if _nolocks
+                                  else [self.create_item(n) for n in self.kept_lock_names()])
+        # SPEC-ashen-capital-lock item 5: mint the burn item, unconditionally on any seed whose
+        # finale exists, and mint it HERE -- before pool_builder -- so count-exactness holds by
+        # construction (the builder fills whatever remains). It is progression. It is deliberately
+        # NOT in `lock_items`: that list is what the start-anchor picker draws from, and the Ashen
+        # Capital may never be the precollected anchor (it is not a place you play).
+        # 🛑 THE ASHEN LOCK IS NO LONGER MINTED (#768). This used to be
+        #       [self.create_item(ASHEN_LOCK)] if gf_finale_active and not _nolocks else []
+        #   -- a real progression item fill could place anywhere, INCLUDING sphere 1, which is how
+        #   a player could stand in the endgame region before doing anything and burn the ending
+        #   early (#694: "the ending plays and the run does not end").
+        #
+        #   The client grants the goal region's open flag and grace bundle itself, once every OTHER
+        #   goal item is held (client#245, er_logic::goal_gate). So the region opens exactly when
+        #   the run is finished rather than whenever fill felt like it -- which is the enforcement
+        #   #694 spent three mechanisms failing to find, and it needs no wall, no kick and no fog.
+        #
+        #   Kept as an empty list rather than deleted so the count arithmetic below reads
+        #   unchanged: one fewer item here is one more filler slot, and `items == locations` is
+        #   still true by construction.
+        _ashen_lock: List[Item] = []
+        # Start holding a region's lock (precollected) so a region is open from Roundtable at run
+        # start -- `start_regions` many of them, default 1.
+        # start. Count-neutral -- the precollected lock leaves the pool (its freed slot becomes filler),
+        # so the remaining N-1 locks stay found progression and the goal (has_all locks) still requires
+        # every one. WHICH lock is features/start_grace.pick_anchor_region: size-weighted by each
+        # region's emitted check count (derived from LOCATIONS right here, never a frozen table) over
+        # the kept BASE regions -- the anchor IS the run's opening region, and a uniform pick over all
+        # kept locks opened ~1 run in 3 on a sub-80-check corridor, every one of them DLC (no
+        # scadutree blessing on a fresh character on top). DLC locks stay in the pool as normal finds
+        # and only anchor when no base region is kept (dlc_only). Under a STRICT progression_surface
+        # (mode 2) the MajorBoss bias INTERSECTS that eligibility (degrading, logged, never raising).
+        # Deterministic via self.random.
+        _slr = getattr(self.options, "start_with_region_lock", None)
+        if _slr is not None and _slr.value and lock_items and not _nolocks:
+            from .features.progression_surface import (regions_with_major_boss, lock_region_name,
+                                                       missable_barred_aps as _ps_missable)
+            from .features.start_grace import pick_anchor_regions
+            _strict = True   # progression_surface_mode retired 2026-08-14; strict is the regime
+            _inputs = self._anchor_pick_inputs(kept)
+            _counts = _inputs["check_counts"]
+            _n_start = _inputs["n"]
+            # 🛑 THE 'already complete at connect' CLAMP IS NOT HERE ANY MORE. It moved to
+            # `_lint_goal_reachability`, called from `generate_early` (2026-08-16): every input it
+            # reads is final by then, so an unsatisfiable yaml is refused BEFORE the draw, the
+            # closure, this anchor pick and a whole pool are built and thrown away. One check, one
+            # home -- a copy left behind here is the redundancy the repo treats as a failure.
+            _regions, _rules, _pool_n = pick_anchor_regions(
+                kept, self.random, _counts, DLC_REGIONS, n=_n_start,
+                uniform=self.options.start_region_selection.value == 1,
+                # `barred` = the MISSABLE set only, not the whole surface bar. A region whose
+                # only MajorBoss check is questline-missable cannot host a Lock on the strength
+                # of it (Deeproot Depths: its sole MajorBoss is the Fortissax reward). The
+                # wider set was tried and REVERTED the same day: handing this the defaulted /
+                # burn-stranded aps too moves the anchor pick in seeds that have nothing to do
+                # with this fix, and test_gf_filler_economy_floor::FillerEconomyFloor -- which
+                # sits one seed off its floor -- went red on the shift. Narrow instrument.
+                major=regions_with_major_boss(
+                    kept, barred=_ps_missable(self)) if _strict else None,
+                # The player's own sentence, already validated in generate_early. A HARD filter --
+                # see pick_anchor_regions' docstring for why this one does not degrade the way the
+                # MajorBoss bias beside it does.
+                only=_inputs["only"],
+                gated=_inputs["gated"],
+                # The goal region never rides in as an EXTRA: a run that opens on the region it
+                # ends in is not a run (Alaric, 2026-08-06), and at start_regions 3 that would stop
+                # being a rarity and become most seeds.
+                #
+                # 🛑 THE CLAIM THAT USED TO SIT HERE WAS TRUE OF ONE REGION ONLY, AND IT READ AS
+                # GENERAL. It said the goal region "cannot anchor at all, by the gated rule": that
+                # holds for GOAL_REGION, which is Leyndell, a REGION_PARENT child (still barred from
+                # the anchor by the gated rule, though no vanilla wall stands behind it any more --
+                # the capital opens on its Lock since 2026-09-14). It does NOT hold for a goal the player NAMES. `goal: promised_consort` on a
+                # dlc_only seed force-keeps Enir Ilim, which is not a gated child and is not
+                # GOAL_REGION -- so it fell through both bars into the dlc-fallback draw and could
+                # open the run it was supposed to end. MEASURED over 20k draws before the fix:
+                # 14.7% of num_regions=6 seeds, and 59.6% at num_regions=1. `never_anchor` below is
+                # the general rule; this line stays as the one that survives GOAL_REGION moving off
+                # a vanilla wall.
+                never_extra=_inputs["never_extra"],
+                # ...and A REGION THE GOAL FORCE-KEPT MAY NEVER OPEN THE RUN AT ALL, first draw
+                # included (2026-08-09). `never_extra` above deliberately leaves the first draw
+                # alone because filtering it would move the anchor of every seed already rolled;
+                # this one deliberately does not, because these are the regions the run ENDS in and
+                # "opens on the region it ends in is not a run" (Alaric, 2026-08-06) was always
+                # meant to cover the first draw too -- it just could not reach it.
+                #
+                # `gf_goal_forced` is the SAME tuple compute_kept forced, so the bar cannot drift
+                # from the force: whatever the goal dragged in, the anchor refuses. Empty for
+                # `auto` on a base-game seed and for `elden_beast` (the Ashen Capital is not a
+                # region), so those seeds are byte-identical. Scoped further by construction: the
+                # anchor pool is the kept BASE regions whenever any are kept, so a DLC entry here
+                # can only bite on a dlc_only seed.
+                never_anchor=_inputs["never_anchor"])
+            _by_region = {lock_region_name(it.name): it for it in lock_items}
+            for _region in _regions:
+                _anchor = _by_region[_region]
+                lock_items.remove(_anchor)
+                self.multiworld.push_precollected(_anchor)
+            # Telemetry (CONTRIBUTING: a feature is armed, or it says why not). The anchor decides the
+            # whole run's opening -- a silent pick is a fail at review.
+            logging.getLogger("Greenfield").info(
+                "[eldenring:%s] start anchor: %s (%d checks) via %s -- eligible %d of %d kept",
+                self.player, _regions[0], _counts[_regions[0]], _rules[0], _pool_n, len(kept))
+            # SAY WHAT THE NUMBER DID (#409's lesson, applied to this option too): the singular
+            # line above is unchanged so a one-anchor seed reads exactly as it always has, and the
+            # extras get their own line rather than being folded in silently.
+            if len(_regions) > 1:
+                logging.getLogger("Greenfield").info(
+                    "[eldenring:%s] start anchors: +%d extra (%s) = %d of %d kept regions open at "
+                    "start", self.player, len(_regions) - 1,
+                    ", ".join("%s (%d checks)" % (r, _counts[r]) for r in _regions[1:]),
+                    len(_regions), len(kept))
+        pool: List[Item] = list(lock_items) + list(_ashen_lock)
+        # Run pool_builder (the juice contributor) LAST, and record how many slots the OTHER
+        # contributors already consumed -- locks (minus any precollected one, already popped above),
+        # progressive copies, ... = len(pool) at that point. pool_builder
+        # sizes its juice against the TRUE remaining Rune tail (rune-fallback checks minus this count).
+        # Previously _reserved_slots assumed only region Locks, so progressive copies were
+        # uncounted and juice over-provisioned -- the over-provision trim then dropped real vanilla
+        # gear past the Rune tail (a precision bug; count stayed exact via range(slots)).
+        # Contributors (locks, progressive copies). pool_builder is NO LONGER one of them:
+        # its juice is a recipe category inside features/filler_budget, which is the single owner of
+        # the filler tail. _gf_reserved_slots is what those contributors ate -- the allocator subtracts
+        # it, exactly as pool_builder's private _rune_tail used to.
+        if not _vanilla:
+            for f in _FEATURES:
+                pool += f.create_items(self)
+        shuffle = self._shuffle_on()
+        _seen_weapon_names = set()
+        # None disables the bundle branch of compact_name (features/pool_compaction.py): with
+        # armor_bundles off (#985) every protector piece stays its own pool item.
+        from .features.armor_bundles import armor_bundles_on as _armor_bundles_on
+        from .features.armor_bundles import is_random as _armor_bundles_random
+        from .features.armor_bundles import is_bundle_name as _is_armor_bundle
+        from .features.armor_bundles import remap_bundle as _remap_bundle
+        _seen_armor_bundles = set() if _armor_bundles_on(self) else None
+        # Mixed mode: the k-th distinct vanilla set the walk encounters pays "Mixed Armor Set k"
+        # (features/armor_bundles.remap_bundle). ONE dict shared by every compaction site below,
+        # so the encounter order is the walk's order. None in sets mode -- compact_name's own
+        # return stands. Count-neutral either way: one wrapper per distinct family encountered.
+        _mixed_for = {} if _armor_bundles_random(self) else None
+
+        def _remap_bundle_name(_nm):
+            if _mixed_for is not None and _is_armor_bundle(_nm):
+                return _remap_bundle(_nm, _mixed_for)
+            return _nm
+        if shuffle and not _vanilla:
+            # Feature floors contribute before the vanilla tail is built. Compact them first and
+            # carry the same seen sets into the tail, otherwise a floor-protected armour piece can
+            # bypass bundling (or an early weapon can leave a duplicate in the vanilla candidates).
+            # Replacements are count-neutral normal filler, so contributor accounting stays exact.
+            from .features.pool_compaction import compact_name as _compact_name
+            for _pool_ix, _item in enumerate(pool):
+                # Bingo acquisition floors name physical pieces. Bundling or
+                # mixing these copies would destroy their promised identities
+                # and advancement classification; ordinary tail armor still bundles.
+                if _item.name in getattr(self, "gf_bingo_requirements", {}):
+                    continue
+                _compacted = _remap_bundle_name(_compact_name(
+                    _item.name, _seen_weapon_names, _seen_armor_bundles))
+                if _compacted != _item.name:
+                    pool[_pool_ix] = self.create_item(
+                        _compacted if _compacted is not None else self._pick_filler())
+        self._gf_reserved_slots = len(pool)
+        total = len(self._seed_locations(HUB)) + sum(len(self._seed_locations(r)) for r in kept)
+        # FEATURE-OWNED LOCATIONS (documented seam): a feature that creates locations beyond
+        # LOCATIONS[HUB + kept] declares them in world.gf_extra_locations (generate_early) and
+        # contributes exactly one pool item per entry from its create_items -- features/finale.py
+        # is the model. Counting them here is what keeps items == locations when they exist.
+        total += len(getattr(self, "gf_extra_locations", ()))
+        slots = total - len(pool)
+        from .features.traps import check_trap_capacity as _trap_capacity
+        required = set(self._required_runes())
+        extras: List[str] = []
+        if shuffle:
+            _excl = getattr(self, "gf_dlc_excluded", ())
+            # progressive_flasks: every Golden Seed / Sacred Tear check pays a "Progressive Flask
+            # Upgrade" instead. Substituting here (rather than adding a fixed count of copies) keeps
+            # the pool count-exact and lets the ladder length follow the checks the seed actually
+            # kept -- num_regions and DLC scale it for free. {} when the option is off.
+            from .features.progressive import vanilla_substitutions as _flask_sub_of
+            # Under vanilla_placement a Golden Seed must BE a Golden Seed: the progressive ladder
+            # replaces the vanilla item with a synthetic one, which is a randomizer behaviour in a
+            # mode whose premise is that nothing moves.
+            _flask_sub = {} if _vanilla else _flask_sub_of(self)
+            # ---- THE GOODS HOLD CEILING (#308) --------------------------------------------------
+            # The game has a stack ceiling per goods row (EquipParamGoods.maxNum), and for a good
+            # that cannot be discarded, deposited or consumed a copy past it is not late -- it is
+            # DESTROYED. AddItemFunc drops it, the client's grant reports success, and the AP stream
+            # has spent the item. Measured on a default seed before this clamp: 27 Cracked Pots
+            # against a ceiling of 19, and 21 undeliverable pot items across the four pot rows.
+            #
+            # The START LOADOUT draws on the same ceiling, so it is subtracted first -- that is where
+            # the reported bug actually came from (9 Hefty Cracked Pots granted at spawn on top of
+            # 10 held, against maxNum 10). A clamp that looked only at the pool would have left the
+            # motivating case untouched.
+            #
+            # Count-neutral by construction: a clamped copy pays FILLER through the SAME append, so
+            # `extras` keeps exactly one entry per location and the pool count cannot move. The
+            # surplus sorts to the tail like any Rune and features/filler_budget re-spends it, so
+            # the player gets curated filler instead of an item that would have evaporated.
+            #
+            # GOODS_HOLD_CAP holds ONLY goods that cannot leave the bag; consumables (Golden Rune,
+            # greases, Starlight Shards) are absent by derivation, because their stack drains and
+            # their surplus is merely early. Weapons/armour/talismans are not goods at all and their
+            # intentional duplicates are untouched. See gen_data.py for the full ruling.
+            from .features.start_items import start_hold_counts as _start_holds
+            _hold_left = hold_budget(GOODS_HOLD_CAP, _start_holds(self)) if GOODS_HOLD_CAP else {}
+            _hold_clamped = {}
+            _merchant_bells_filtered = {}
+            _seed_regions = frozenset([HUB] + list(kept))
+            # The walk order below IS the pairing vanilla_placement.pins() reproduces; record the
+            # ap-ids as we go so pre_fill pins the RESOLVED name (post DLC-exclusion, post
+            # flask substitution, post hold-cap clamp), never a raw LOCATION_ITEM lookup that
+            # would disagree with the pool we actually built.
+            _pin_aps: List[int] = []
+            for rn in [HUB] + kept:
+                for (_n, ap_id, _flag) in self._seed_locations(rn):
+                    nm = LOCATION_ITEM.get(ap_id)
+                    # DLC off: a kept BASE / HUB location whose vanilla item is DLC-only pays Rune
+                    # instead (the same rule the juice / varied-filler / filler-foreign paths follow).
+                    # Without this the item_shuffle PRIMARY pool leaks DLC gear anchored to base
+                    # regions (Roundtable Hold -- the HUB -- anchors Spear of the Impaler; Mohgwyn
+                    # Palace; ...) into a DLC-off seed, and AP fill scatters it onto reachable
+                    # checks/shops. FILLER routes through _pick_filler, which is already DLC-safe.
+                    if nm and _excl and nm in _excl:
+                        nm = None
+                    # A merchant bell is useful only when at least one of its physical merchant
+                    # regions exists in this seed. Otherwise the Twin-Maiden menu contains zero AP
+                    # checks and the sent item looks like a broken randomizer (#555/#560). Replace
+                    # it through the SAME None -> FILLER path as every other count-neutral removal.
+                    if (nm and not _vanilla
+                            and not merchant_bell_pool_allowed(nm, _seed_regions)):
+                        _merchant_bells_filtered[nm] = _merchant_bells_filtered.get(nm, 0) + 1
+                        nm = None
+                    if nm and _flask_sub:
+                        nm = _flask_sub.get(nm, nm)
+                    # Hold-ceiling clamp: past the ceiling this copy would be destroyed on delivery,
+                    # so it pays filler instead. `_hold_left` is decremented only when a copy is
+                    # KEPT, so the count is of surviving copies, not of locations considered.
+                    if nm is not None and nm in _hold_left:
+                        if not hold_slot_available(_hold_left, nm):
+                            _hold_clamped[nm] = _hold_clamped.get(nm, 0) + 1
+                            nm = None
+                        else:
+                            _hold_left[nm] -= 1
+                    # LAST, and the order is the point (#616). A lot that grants two copies pays the
+                    # stacked item -- but DLC exclusion, flask substitution and the hold ceiling all
+                    # key on the BASE name, and `Scadutree Fragment x2` is a feature-minted name that
+                    # is in none of their tables. Promoting before them would leak a DLC item into a
+                    # DLC-off seed through a name DLC_ITEM_NAMES cannot see. Promoting here, the base
+                    # name is what every one of those rules judged, exactly as before.
+                    _base_nm = nm
+                    nm, _units = stacked_vanilla_name(nm, ap_id, item_name_to_id)
+                    if _units > 1 and _base_nm in _hold_left:
+                        # The stack hands over `_units` copies against the ONE ceiling slot charged
+                        # above; charge the rest, against the BASE name -- the ceiling is a property
+                        # of the game's goods row, which both names resolve to, and `_hold_left` is
+                        # keyed by the base name only. No capped good has a minted stack today
+                        # (measured: GOODS_HOLD_CAP has no `Scadutree Fragment` entry), so this is a
+                        # guard against the next one, not a live path.
+                        _hold_left[_base_nm] -= _units - 1
+                    _pin_aps.append(ap_id)
+                    extras.append(nm if nm and nm in item_name_to_id else FILLER)
+            if _vanilla:
+                # FEATURE-OWNED LOCATIONS (the finale's Ashen Capital checks) are counted in `total`
+                # below but are NOT in LOCATIONS[HUB + kept], so the walk above misses them and the
+                # pairing would come up short by exactly their length. They pin like any other
+                # location -- the Elden Beast's remembrance is a vanilla drop like the rest.
+                for (_n2, _ap2, _f2) in getattr(self, "gf_extra_locations", ()):
+                    _nm2 = LOCATION_ITEM.get(_ap2)
+                    if _nm2 and _excl and _nm2 in _excl:
+                        _nm2 = None
+                    _nm2, _ = stacked_vanilla_name(_nm2, _ap2, item_name_to_id)
+                    _pin_aps.append(_ap2)
+                    extras.append(_nm2 if _nm2 and _nm2 in item_name_to_id else FILLER)
+            # keep real items first; among reals, keep required Great Runes ahead of everything so
+            # the over-provision trim (below) can never drop a rune the goal needs. FILLER (Rune)
+            # sorts LAST, so growing `pool` (juice/locks) drops Rune off the tail.
+            # pool_builder_scope=all_filler widens what juice can displace: junk-consumable vanilla
+            # filler also sorts to the tail (rank 2), just ahead of the Rune sentinel (rank 3) and
+            # BEHIND every protected item (required runes rank 0; useful gear + tuned economy +
+            # progression keys rank 1). So the trim drops Rune first, then junk filler, and can never
+            # reach a protected/progression item. displaceable_filler is the SAME predicate
+            # features/pool_builder uses to size its budget, so the drop order and the juice count
+            # cannot drift. Default scope=rune_tail keeps the historical 2-level sort byte-for-byte.
+            # Rank every check's vanilla item so the count-trim drops the RIGHT things: the Rune
+            # sentinel first (3), then displaceable junk consumables (2), never a required rune (0) or
+            # a protected/real item (1). displaceable_filler is the same predicate features/
+            # filler_budget sizes its budget with, so the drop order and the budget cannot drift.
+            if _hold_clamped:
+                # Tolerance requires telemetry: a clamp that silently reshapes the pool is the same
+                # class of quiet as the bug it fixes. Names + counts, so a seed's log says exactly
+                # which items were over the ceiling and by how much.
+                print("[greenfield] goods hold-ceiling: %d pool cop(ies) past the game's stack "
+                      "ceiling paid filler instead -- %s"
+                      % (sum(_hold_clamped.values()),
+                         ", ".join("%s x%d" % (k, v) for k, v in sorted(_hold_clamped.items()))))
+            if _merchant_bells_filtered:
+                logging.getLogger("Greenfield").info(
+                    "[eldenring:%s] merchant bell pool: %d bell(s) paid normal filler because none "
+                    "of their merchant regions are kept -- %s", self.player,
+                    sum(_merchant_bells_filtered.values()),
+                    ", ".join("%s x%d" % (k, v)
+                              for k, v in sorted(_merchant_bells_filtered.items())))
+            from .features.filler_curation import displaceable_filler as _disp
+
+            def _tail_rank(x):
+                if x == FILLER:
+                    return 3
+                if x in required:
+                    return 0
+                return 2 if _disp(self, x) else 1
+            # 🛑 THE SORT IS WHAT DESTROYS THE PAIRING. Under vanilla_placement `extras` IS the
+            # answer -- index k is the vanilla item of the k-th walked location -- so ranking it
+            # for the count-trim (which cannot fire here: pool is empty, slots == total) would
+            # throw away the only thing this mode computes.
+            if not _vanilla:
+                extras.sort(key=_tail_rank)
+                # trap_count has no fixed ceiling; this seed's filler supply is the ceiling, read
+                # here where the cut is known and BEFORE anything indexes `extras` at `slots`.
+                # Refuses, naming the largest count that fits, rather than let traps push real
+                # items off the tail.
+                _trap_capacity(self, slots, [_tail_rank(x) for x in extras])
+                # Feature contributors consume `slots` before this vanilla tail is cut. In a tiny
+                # one-region seed, even rank-1 protected gear can overfill the tail; natural
+                # Scadutree fragments were then sometimes cut after scadu_supply.plan() had already
+                # subtracted them from its injection. Rescue only fragments that would actually be
+                # cut, swapping them with the last surviving ordinary rank-1 item. This leaves the
+                # established itempool order byte-for-byte unchanged in every seed where the bug is
+                # absent (important: fill consumes that order as part of its deterministic stream).
+                def _scadu(x):
+                    return x == "Scadutree Fragment" or x.startswith("Scadutree Fragment x")
+
+                cut_scadu = [k for k in range(slots, len(extras)) if _scadu(extras[k])]
+                victims = [k for k in range(min(slots, len(extras)) - 1, -1, -1)
+                           if _tail_rank(extras[k]) == 1 and not _scadu(extras[k])]
+                for keep, drop in zip(cut_scadu, victims):
+                    extras[drop], extras[keep] = extras[keep], extras[drop]
+        elif not _vanilla:
+            # item_shuffle off: the tail is all filler, so traps can only hurt by overflowing it.
+            _trap_capacity(self, slots, [])
+        _names: List[str] = [extras[k] if k < len(extras) else FILLER for k in range(slots)]
+        if shuffle and not _vanilla:
+            # Compact only AFTER the contributor trim chose the copies that actually survive.
+            # Doing this in the location walk would remember a weapon/family from the cut tail and
+            # then delete the sole surviving copy. The resulting filler enters the shared allocator
+            # below, so every removed piece remains useful count-neutral economy capacity.
+            _names = [(_remap_bundle_name(_compact_name(nm, _seen_weapon_names, _seen_armor_bundles)) or FILLER)
+                      for nm in _names]
+        if _vanilla:
+            # slots == total and pool is empty (no locks, no feature contributors), so _names is
+            # extras unchanged and index k still means 'the k-th walked location'. Assert it
+            # rather than trust it: a future contributor that forgets the _vanilla guard would
+            # otherwise shift the pairing by its own length and pin silently-wrong items.
+            if len(_names) != len(_pin_aps):
+                raise AssertionError(
+                    '[eldenring] vanilla_placement: pool/location pairing broke -- %d pool slots '
+                    'for %d walked locations. A create_items contributor is running that should '
+                    'be skipped under this mode.' % (len(_names), len(_pin_aps)))
+            self.gf_vanilla_pins = list(zip(_pin_aps, _names))
+        # THE FILLER TAIL, ALLOCATED ONCE. Every slot ranked 2 or 3 above is budget; features/
+        # filler_budget decides what goes in all of them in a single pass -- economy reservation off
+        # the top, then consumables and juice from the remainder. There is no second pass to undo it,
+        # which is the entire point (see that module's docstring for the three-pass bug it replaces).
+        if shuffle and not _vanilla:
+            from .features import filler_budget as _fb
+            _budget_ix = [k for k, nm in enumerate(_names)
+                          if nm == FILLER or (nm not in required and _disp(self, nm))]
+            _plan = _fb.plan(self, len(_budget_ix))
+            for _k, _pick in zip(_budget_ix, _plan):
+                if _pick is not None:      # None = keep what the check already paid (junk / Rune)
+                    _names[_k] = (_remap_bundle_name(_compact_name(
+                        _pick, _seen_weapon_names, _seen_armor_bundles)) or FILLER)
+        _tail_start = len(pool)
+        for _nm in _names:
+            # Under vanilla_placement an unpinnable location (a gesture, an unnamed `check -` row:
+            # 67 of 4916) pays the MONOTONE Rune, not varied filler -- `_pick_filler` would put an
+            # item the base game never had there into a mode whose premise is that nothing moves.
+            if _nm == FILLER:
+                _nm = FILLER if _vanilla else self._pick_filler()
+            # No second pass over the classification either: features/filler_budget.classify is
+            # retired (its promotion became a no-op when item_categories flipped the gear
+            # categories to `useful`), so an item's class is decided once, in _class_for.
+            pool.append(self.create_item(_nm))
+        # Missable protection is a placement promise, so the pool must contain at least one
+        # compatible filler item per protected check. A small/category-filtered seed can spend most
+        # of its short tail on useful juice (especially after #624 retired obsolete stone weight),
+        # leaving the later item-rule with fewer legal items than locations. Reserve capacity here,
+        # where the real classifications and the final tail both exist: replace only useful items
+        # drawn from the filler tail, never progression or feature-owned items.
+        from .features.missable_locations import (MISSABLE_LOCATIONS as _MISSABLE_LOCATIONS,
+                                                  ProtectMissableLocations as _ProtectMissable)
+        _miss_opt = getattr(self.options, "protect_missable_locations", None)
+        if (_miss_opt is not None
+                and _miss_opt.value == _ProtectMissable.option_progression_and_useful):
+            _miss_n = sum(1 for loc in self.multiworld.get_locations(self.player)
+                          if getattr(loc, "address", None) in _MISSABLE_LOCATIONS)
+            _bar = ItemClassification.progression | ItemClassification.useful
+            _eligible = sum(1 for item in pool if not (item.classification & _bar))
+            _short = max(0, _miss_n - _eligible)
+            if _short:
+                for _ix in range(_tail_start, len(pool)):
+                    if _short <= 0:
+                        break
+                    if pool[_ix].classification & ItemClassification.useful:
+                        pool[_ix] = self.create_item(FILLER)
+                        _short -= 1
+                if _short:
+                    raise OptionError(
+                        "protect_missable_locations=progression_and_useful needs %d eligible items, "
+                        "but the filler tail can supply only %d even after reserving every useful "
+                        "tail slot. Keep more regions or choose a less restrictive protection level."
+                        % (_miss_n, _miss_n - _short))
+                logging.getLogger("Greenfield").info(
+                    "[eldenring:%s] missable protection reserved %d filler tail slot(s) from juice",
+                    self.player, _miss_n - _eligible)
+        # ONE pass. No PASS-2. The old design ran additive contributors, then in-place SWAPS over
+        # the materialised pool (stone_injection, then curated_filler.curate()), then a THIRD relabel
+        # in post_fill (stone_ramp) -- three owners of one resource, arbitrated by nothing but the
+        # order they happened to run in. That composition silently starved the upgrade economy; see
+        # features/filler_budget.py. The swaps are gone: the allocator decided the whole tail above.
+        #
+        # THE EARLY GUARANTEE. The stone reservation is a claim about SUPPLY -- the seed HOLDS enough
+        # stones -- and on a small seed that happens to land them early because spheres 0-1 ARE most of
+        # the seed. At a large num_regions it does not, and the upgrade curve goes sparse in silence.
+        # So declare the early stones to AP (`local_early_items`) and let FILL place them: intent, not
+        # sphere coupling. Clamped to what this pool actually holds, and it warns if it cannot pay.
+        if shuffle and not _vanilla:
+            from .features.mario_mode import filter_rewards as _mario_filter_rewards
+            pool = _mario_filter_rewards(self, pool, FILLER)
+            _fb.declare_early_items(self, [_it.name for _it in pool])
+        if shuffle and not _vanilla:
+            from .features.power_progression import remap_rewards
+            pool = remap_rewards(self, pool, FILLER)
+        self.multiworld.itempool += pool
+
+    def pre_fill(self) -> None:
+        # 🛑 `flood` never calls `stage_fill_hook` (`Fill.py:673`), and that is where every one of
+        # our cross-world placement passes now lives. Say so ONCE, loudly, rather than let a seed
+        # come out silently uncurated: an option that changes what runs without a line is the
+        # failure mode this project keeps rediscovering. `balanced` is the default and the only
+        # algorithm these passes have ever run under; `flood` is not in our yaml template.
+        if (getattr(self.multiworld, "algorithm", "balanced") != "balanced"
+                and not getattr(self.multiworld, "_gf_fill_algorithm_warned", False)):
+            self.multiworld._gf_fill_algorithm_warned = True   # once for the table, not per slot
+            logging.getLogger("Greenfield").warning(
+                "[eldenring:%s] fill algorithm is %r, not 'balanced': Archipelago calls "
+                "stage_fill_hook only under 'balanced', so NONE of the cross-world placement "
+                "passes will run -- released-Lock progression sharing, incoming progression "
+                "(cross_game_progression), preferred placement (blessing fragments), the useful "
+                "export reservation, keep_out_of_shops capacity finalisation and its forbidden-item "
+                "reservation. The seed will generate; it will not be curated.",
+                self.player, getattr(self.multiworld, "algorithm", None))
+        if _vp.is_on(self):
+            # EVERY location is locked to its own vanilla item, so there is no fill left to do --
+            # and nothing for progression_surface to confine (its whole job is choosing WHERE this
+            # world's progression lands, which vanilla already decided). Returning here is what
+            # makes the world hermetic: zero unfilled locations means AP can never place a foreign
+            # item in Elden Ring, which is the property the mode's safety argument rests on.
+            _vp.apply(self)
+            return
+        # #582: reserve compatible filler for filler-only missable checks before AP's general fill
+        # can spend it elsewhere. The feature owns the matcher; core only provides the lifecycle
+        # hook, following progression_surface immediately below.
+        from .features import missable_locations as _missable
+        _missable.reserve_filler(self)
+        # progression_surface (v0.2): CONFINE this world's own progression (region Locks + required/
+        # gate runes + legacy keys) to a small high-confidence surface -- default MajorBoss -- via
+        # fill_restrictive over the selected classes, with a feasibility ladder that widens (then spills
+        # to the pool) so it never FillErrors. Runs before the general fill (locations exist,
+        # get_all_state valid).
+        from .features import progression_surface as _ps
+        _ps.apply(self)
+        # The legacy curated_fill fallback is GONE: it only ran when progression_surface_mode was OFF,
+        # which was FROZEN out of reach at v0.2 and RETIRED 2026-08-14 -- dead code carrying the
+        # retired big-ticket concept (a SECOND list of "important checks" that disagreed with the
+        # surface). One surface, one definition, and now only one code path to it.
+
+    @classmethod
+    def stage_fill_hook(cls, multiworld, progitempool, usefulitempool, filleritempool,
+                        fill_locations) -> None:
+        """Every pass that places Elden Ring items onto OTHER worlds' locations, once, from core's
+        fill hook.
+
+        🛑 IT HAS TO BE A STAGE HOOK, and it has to be THIS one. `AutoWorld.call_all` walks
+        `multiworld.player_ids` IN PLAYER ORDER, so placing foreign items from `pre_fill` would give
+        player 1 first pick of everyone's surface and player 2 the leftovers -- curation decided by
+        slot number (TUNIC's own `stage_pre_fill` raises at exactly that). But `stage_pre_fill` is
+        wrong too: it runs in CLASS-NAME order, and we sort before most of the alphabet, so we were
+        taking locations from partners that had not yet confined their own items, and locking away
+        copies the owner had declared `early_items`. `stage_fill_hook`
+        (`Fill.distribute_items_restrictive:517`) runs after EVERY world's `pre_fill` and
+        `stage_pre_fill` and after `distribute_early_items`, and before the priority and progression
+        fills: every partner has placed what it needed, every early item is on a sphere-1 location,
+        and nothing else has placed anything yet. Four shipped worlds use it and core tests the
+        contract (`test/general/test_fill.py:628`). That is what deleted `players_still_prefilling`
+        (#1457) and the declared-early skips (#1456, seed 1044).
+        See docs/specs/SPEC-fill-hook-migration-20260907.md.
+
+        THE SHIM. Core hands us the unplaced items already split into three classified pools, and
+        `multiworld.itempool` is dead from here on -- but our passes pop from it, return leftovers
+        to it, and build reachability with `get_all_state`, which collects it. `pool_view` presents
+        the three pools as `multiworld.itempool` for the body and, on the way out, filters each pool
+        and `fill_locations` by what we placed, so core's order and classification survive. One
+        adapter instead of seven rewrites; see features/fill_hook_shim.
+
+        🛑 CAVEAT: `flood` never calls this hook (`Fill.py:673`), so under that algorithm none of
+        these passes run at all. `balanced` is the default and the only algorithm they have ever
+        run under; `flood` is not offered in our yaml template, and `pre_fill` warns if it is set.
+
+        The work is in the features so each owns its own mechanism; core only supplies the world
+        list, because `get_game_worlds` needs the GAME constant and features may not import core."""
+        from .features import fill_hook_shim as _shim
+        from .features import progression_surface as _psf  # local, like pre_fill/post_fill do
+        with _shim.pool_view(multiworld, progitempool, usefulitempool, filleritempool,
+                             fill_locations):
+            _worlds = list(multiworld.get_game_worlds(GAME))
+            _psf.place_released_locks(multiworld, _worlds)
+            # #927: optionally reserve a 1/N share of every partner game's advancement on each
+            # opted-in ER slot. Run after ER's own released-progression pass so both see the final
+            # open surface, but before ordinary/useful placement consumes partner items or ER
+            # locations.
+            from .features import incoming_progression as _incoming
+            _incoming.reserve_incoming_progression(multiworld, _worlds)
+            # v0.6 soft-preference category: first give blessing fragments a deliberate
+            # proportional foreign share. Any refused items return to the pool, so this can never
+            # make fill fail.
+            from .features import preferred_placement as _preferred
+            _preferred.reserve_foreign_share(multiworld, _worlds)
+            # #918's ruling (Alaric 2026-08-20): confine stays 100; the useful-export displacement
+            # is fixed by a dedicated reservation pass. BEFORE keep_out finalisation on purpose --
+            # exporting an item shrinks what must fit in the owner's own grid, so capacity sees the
+            # truer demand. The share is a fixed derivation (uniformity), not a knob.
+            from .features import export_reservation as _exr
+            _exr.reserve_useful_exports(multiworld, _worlds)
+            # Whatever the foreign reservations did not consume prefers the owner's selected
+            # surface. This is intentionally AFTER exports: a roomy ER surface must not absorb
+            # every fragment before another game gets its fair share.
+            _preferred.place_on_surface(multiworld, _worlds)
+            # #903: keep_out_of_shops cannot decide its capacity in set_rules. Missable protection,
+            # each world's progression pass, and the cross-world released-Lock pass above all
+            # consume non-shop slots after that hook. Finalise against the actual remaining grid,
+            # after every progression placement and before AP's general fill.
+            from .features import keep_out_of_shops as _kos
+            for _world in _worlds:
+                _kos.finalize_rules(_world)
+            _kos.reserve_forbidden_items(multiworld, _worlds)
+
+    def post_fill(self) -> None:
+        # ---- COVERAGE GATE (RAISING as of 2026-07-14) ------------------------------------------
+        # Every EMITTED location must be DETECTABLE (a real acquisition flag the client polls, not
+        # aliased, not colliding with a system flag), SUPPRESSED (if it vanilla-holds a ware, some
+        # mechanism stops the game handing that ware over ALONGSIDE the AP item), and
+        # REGION-CONSISTENT (every source that claims a region agrees, and the region has real kick
+        # geometry).
+        #
+        # It shipped in report mode -- fail-open on debut, per the release rule -- and the baseline
+        # has now soaked to ZERO violations, so it raises. That matters more than it sounds: EVERY
+        # significant bug of 2026-07-13/14 was inside its scope and none of them errored.
+        #   * play_region buckets in the wrong id space -> Weeping's lock and the ENTIRE DLC's locks
+        #     had never enforced anything, in any seed (region);
+        #   * check_lots keyed by raw id instead of FullID -> armour, talismans and every Ash of War
+        #     double-paid (suppression);
+        #   * lotItemCategory 0 and 6 "never judged" -> 13 checks handed out their vanilla ware
+        #     forever, and the lot blank was the ONLY mechanism that could ever suppress them
+        #     (suppression).
+        # Not one of those crashed, logged, or failed a test. They were silent wrong answers, which
+        # is what this gate exists to convert into loud ones.
+        #
+        # Runs FIRST: a seed that cannot pay its own contract should die before we spend anything
+        # else on it. If it fires, DO NOT quarantine to make it green -- coverage_quarantine is for
+        # locations genuinely excluded from the pool, and ACCEPTED_LEAKS is FILLER-only and needs a
+        # reason and a date. Silencing this gate re-creates the exact bug it just caught.
+        from . import coverage as _cov
+        _cov.assert_coverage(self)
+
+        # F (2026-07-10): progression-reachability safety net. Verify every own advancement item is
+        # actually reachable from a real CollectionState; raise FillError on any stranding (an in-game
+        # soft-lock under accessibility:minimal, which AP does not self-check). Runs first so a doomed
+        # seed dies before the cosmetic stone-ramp work below. Fail-open on internal audit error.
+        if not _vp.is_on(self):
+            from .features import progression_surface as _ps
+            _ps.audit_reachable(self)
+
+        # stone_ramp DELETED. It was never a working mechanism that lost its inputs -- it never
+        # worked: 3 stones placed on the playtest seed, 0 on the pre-freeze A/B. The economy that
+        # felt good was curated_filler's, all along. Its model was unsound (it measured supply as
+        # though the player 100%s every fill sphere, so its deficit was ~never positive), its failure
+        # mode was unsound (`while _deficit > 0 and _li < len(_locs)` ran out of slots and shrugged in
+        # silence), and it was architecturally hostile (a FOURTH pass, relabelling placements after
+        # fill and locking them, bypassing progression balancing). Its one legitimate job -- low-tier
+        # stones affordable early -- is now a correctly-sized, low-tier-weighted RESERVATION in
+        # features/filler_budget, which needs no sphere coupling to do it. Coupling a player-visible
+        # economy to an invisible fill artifact is what made it both wrong and unfixable.
+
+        # MULTIWORLD CONTRIBUTION. How many of this slot's items actually went into other players'
+        # worlds, and how much of that was filler. post_fill is the earliest point the question has a
+        # true answer -- before it, all anyone can state is the ceiling the options permit. See
+        # pool_report.py for why the ceiling on its own is a misleading thing to print.
+        from . import pool_report as _pr
+        _pr.log(self)
+
+    def _add_locations(self, region: Region, region_name: str) -> None:
+        # A GUESSED REGION MAY NOT CARRY PROGRESSION.
+        # DEFAULTED_REGION_APS = checks whose real region is unknown, so gen_data defaulted them to the
+        # HUB (see gen_data._region_is_derived). AP then believes they are reachable at spawn -- but the
+        # item still spawns wherever it PHYSICALLY lives, which may be behind a region Lock. Barring them
+        # from the progression SURFACE is not enough: when the surface ladder widens/spills, the general
+        # fill still sees a reachable hub location and will happily drop an advancement item on it.
+        # (Fuzz caught exactly that: Rykard's Great Rune landed on a guessed-region Smithing Stone.)
+        # So the bar has to live on the LOCATION: mark them EXCLUDED = filler only, whatever fill runs.
+        # Real seed this killed: AP_55352390472076588352 -- Stormveil Castle Lock on Golden Seed f400220,
+        # which actually sits in Stormveil. Caelid start. Unwinnable.
+        # Capital reconciler (SPEC-capital-reconciler.md): while armed, the client keeps burn
+        # flag 9116 matched to the player's capital, so m11_00 is NEVER permanently lost -- the
+        # ERDTREE_BURN_APS "may not carry progression" bar is lifted (that bar exists ONLY for
+        # the strand the reconciler ends). Off/foreign -> the bar snaps back: the one-flag
+        # disable also restores the fill-side mitigation. The other two causes always apply.
+        _barred = _NO_PROGRESSION_APS
+        if getattr(self, "gf_capital_reconciler", False):
+            _barred = _barred - frozenset(ERDTREE_BURN_APS)
+        # #701 OPTION B -- A COLLAPSED MERCHANT ROW GETS ITS REAL REGION BACK.
+        # A row whose seller stands in several regions (Patches/Thiollier, the Dragon Communion
+        # altars) is pinned nowhere, sits in the always-open hub and is barred by option C (#706).
+        # If THIS seed kept one of the merchant's real regions, the row stops being a guess: it is
+        # regioned to the EARLIEST kept one in SPINE order and gated on reaching it below, so it can
+        # carry progression again -- honestly this time. Requiring one named site is STRICTER than the
+        # true disjunction ("any site"), so it can never assert reachability the player lacks.
+        # 🛑 C IS THE FALLBACK, NOT A THING B REMOVED: a row with NO kept site is absent from this map
+        # and keeps its bar. B narrows C to exactly the case where C is still true; a seed keeping none
+        # of {Limgrave, Mt. Gelmir, Cerulean} is legitimate and must still generate.
+        try:
+            from .features.progression_surface import (collapsed_site_regions as _csr,
+                                                       collapsed_lift_aps as _cla,
+                                                       _roundtable_merchant_aps as _rhma)
+            _sites = _csr(self)
+            _barred = _barred - _cla(self)
+            # A surface spill rejoins AP's general fill, so keep every merchant row FILED in the
+            # always-open hub permanently barred at the location chokepoint. This covers Enia, the
+            # Twin Maidens, and questline Patches/Thiollier; ordinary wandering merchants are filed
+            # in their physical regions and remain eligible to hold progression (#860).
+            _barred = _barred | _rhma()
+        except Exception:
+            _sites = {}
+        # confine_foreign_progression (progression_surface): the surface ap-ids that MAY host another
+        # player's advancement. None => feature off. Non-surface locations get a foreign-advancement bar
+        # below. Computed once in create_regions (self._foreign_confine_surface).
+        _fsurf = getattr(self, "_foreign_confine_surface", None)
+        # DLC-GATED HUB SHOP ROWS LEAVE A NO-DLC SEED (AzoTax, Discord 2026-08-20). Enia's 36
+        # remembrance-trade and DLC-armor rows are Roundtable Hold checks -- kept in EVERY seed --
+        # whose vanilla shop row is gated on DLC content (a DLC remembrance consumed as material,
+        # or a DLC boss's ceremony flag releasing a DLC armor set). With the DLC off they can
+        # never open: pre-#860 apworlds could park REQUIRED items there (AzoTax's two-player seed
+        # goal-locked on one), and post-#860 they survived as forever-uncompletable checks. Skip
+        # them at creation, exactly as a sealed DLC region's own checks are skipped; the pool is
+        # derived from created locations, so their vanilla wares leave with them.
+        for (name, ap_id, _flag) in self._seed_locations(region_name):
+            _loc = GFLocation(self.player, name, ap_id, region)
+            _site = _sites.get(ap_id)
+            if _site is not None:
+                # THE GATE IS ON THE LOCATION, NOT THE REGION KEY. The row keeps its `Roundtable Hold`
+                # name and its hub parent on purpose -- #701 forbids fixing this by renaming (#557 rules
+                # the prefix intended, the tracker and the client's kick geometry group on it) -- while
+                # its REACHABILITY becomes the truth: you can get this ware once you can reach the
+                # region its seller stands in. can_reach(region), not has("<R> Lock"), so a site with a
+                # parent chain (REGION_PARENT) needs the whole chain, and natural_progression /
+                # vanilla_placement -- which mint no Lock items -- gate it correctly too.
+                _prev_a = _loc.access_rule
+                _loc.access_rule = lambda state, _p=_prev_a, _r=_site, _pl=self.player: (
+                    state.can_reach(_r, "Region", _pl) and _p(state))
+            # v0.6 evidence invariant: only checks with an audited, generated trust binding may host
+            # advancement. This is an all-owner rule; stranding another world's progression is just
+            # as fatal as stranding ours. Useful/filler stays in normal fill.
+            _eph.apply_location_rule(self, _loc)
+            if ap_id in _barred:
+                # Bar ADVANCEMENT only, via item_rule -- do NOT use LocationProgressType.EXCLUDED.
+                # EXCLUDED changes AP fill ordering and classification globally. An item_rule expresses
+                # the actual invariant at the location chokepoint, composes with name/capacity rules,
+                # and keeps useful/filler (including foreign non-progression) in ordinary fill.
+                # Bars advancement from ANY player: progression stranded somewhere unreachable is just
+                # as unwinnable for a foreign world as for ours.
+                # ERDTREE_BURN_APS rides the same rule: killing Maliketh burns the Erdtree, switches
+                # Leyndell's graces OFF and replaces m11_00 with the Ashen Capital -- 79 checks gone,
+                # permanently. num_regions can unseal Farum Azula while Leyndell is sealed, so the
+                # player is free to do that with those checks still uncollected. They stay CHECKS;
+                # they just cannot be something the seed REQUIRES. (Alaric, playtest 2026-07-11.)
+                _prev = _loc.item_rule
+                _loc.item_rule = lambda item, _p=_prev: (not item.advancement) and _p(item)
+            if _fsurf is not None and ap_id not in _fsurf:
+                # `if`, not `elif` (#1612): a `_barred` check above already refuses all advancement,
+                # so for the default foreign-advancement bar this adds nothing, but under
+                # multiworld_scope: surface the bar covers foreign FILLER too and must reach it.
+                # confine_foreign_progression ON: this is one of our FILLER (non-surface) checks, so bar
+                # OTHER players' advancement from it -- foreign progression is thereby confined to our
+                # surface (the same checks our own region Locks use). Our OWN advancement may still land
+                # here: apply() already confined it, and its ladder/spill safety valve must stay open, so
+                # a spilled own Lock is never stranded. Only foreign advancement is refused; foreign
+                # useful/filler and everything of ours still fits.
+                _prev = _loc.item_rule
+                _fb = self._foreign_barred_fn
+                _loc.item_rule = lambda item, _p=_prev, _pl=self.player, _fbf=_fb: (
+                    not _fbf(item, _pl)) and _p(item)
+            region.locations.append(_loc)
+
+    def create_regions(self) -> None:
+        # confine_foreign_progression: resolve the surface ap-id set ONCE (None => feature off) so every
+        # _add_locations call bars foreign advancement on the same non-surface checks. Must precede the
+        # location loop below.
+        try:
+            from .features.progression_surface import (confined_surface_ids as _confined_surface_ids,
+                                                       foreign_bar_for as _foreign_bar_for)
+            self._foreign_confine_surface = _confined_surface_ids(self)
+            # SHARE-AWARE. At the 100 default this IS `foreign_advancement_barred`, the same function
+            # object the toggle used, so the shipped seed runs the identical code path. Below 100 it
+            # is a per-item-name closure -- see features/progression_surface.foreign_bar_for.
+            self._foreign_barred_fn = _foreign_bar_for(self)
+        except Exception:
+            self._foreign_confine_surface = None
+            self._foreign_barred_fn = None
+        menu = Region("Menu", self.player, self.multiworld)
+        hub = Region(HUB, self.player, self.multiworld)
+        self.multiworld.regions += [menu, hub]
+        menu.connect(hub)  # Roundtable Hold is free
+        self._add_locations(hub, HUB)
+        created: Dict[str, Region] = {}
+        for r in self._kept():  # sealed regions are simply not created
+            reg = Region(r, self.player, self.multiworld)
+            self.multiworld.regions.append(reg)
+            self._add_locations(reg, r)
+            created[r] = reg
+        # A gated child (REGION_PARENT) hangs off its PARENT region, not the hub: its entrance is
+        # only traversable once the whole ancestor Lock chain is held, which is the walk-in truth.
+        # (Its grace bundle used to be withheld past an armed wall too -- features/graces.py -- so
+        # no hub warp existed; since the Raya (2026-08-16) and Leyndell (2026-09-14) retirements no
+        # wall is armed and every bundle rides its Lock. The parenting above is what remains, and
+        # it is what lets fill never strand progression in a child whose parent is sealed/unfound.)
+        # compute_kept guarantees a kept child's parent is kept; a miss here is corrupt state.
+        _natural = _np.is_on(self)
+        # vanilla_placement: the base game gates this seed, so AP gates nothing -- every region
+        # hangs off the hub with an always-true entrance. It still needs the EVENT LOCKS below
+        # for the same reason natural_progression does (many features ask has('<R> Lock')).
+        _vanilla = _vp.is_on(self)
+        _withheld_lock = self.withheld_goal_lock()
+        for r, reg in created.items():
+            # In natural_progression the geography flattens (a lock warps you in), so most regions hang
+            # off the hub and only the kept chokepoints keep a graph parent (natural_progression.
+            # NATURAL_PARENT: Leyndell->Altus, Sewer->Leyndell); the entrance rule is the region's real
+            # vanilla-key clause instead of has("<Region> Lock").
+            if _vanilla or _bingo_active(self):
+                parent = None
+            else:
+                parent = _np.natural_parent(r) if _natural else REGION_PARENT.get(r)
+            if parent is not None and parent not in created:
+                raise RuntimeError(
+                    f"create_regions: gated child {r!r} kept without its parent {parent!r} -- "
+                    f"compute_kept must close over REGION_PARENT")
+            src = created[parent] if parent is not None else hub
+            if _vanilla or _bingo_active(self):
+                rule = lambda state: True
+            elif _natural:
+                _erule = _np.entrance_rule(self, r)
+                rule = _erule if _erule is not None else (lambda state: True)
+            elif f"{r} Lock" == _withheld_lock:
+                # 🛑 THE GOAL REGION DOES NOT ASK FOR A LOCK NOBODY MINTS. Its Lock is withheld
+                # (`withheld_goal_lock`), so `has("<R> Lock")` would be false forever and the
+                # region -- with the run's ending inside it -- would be unreachable in logic: a
+                # FillError, or an unwinnable seed past it. It asks for the SAME set the client
+                # waits on before granting the region, so AP's logic and `er_logic::goal_gate`
+                # open the arena on one condition rather than two that can drift.
+                #
+                # ⚠️ `kept_lock_names()`, NOT `goal_required_lock_names()`: create_regions runs
+                # BEFORE create_items, so the start anchor is not precollected yet and the
+                # "minus the anchor" spelling is a silent no-op here. That exact mistake shipped
+                # in the finale wiring on this branch and had to be fixed; see finale.py.
+                # `completed` uses the locks as AP's conservative reachability proxy: every
+                # region's checks cannot be completed before its entrance is available. The
+                # client enforces actual checked-location completion at runtime. `none` has no
+                # region-side prerequisite at all.
+                _locks = (tuple(self.kept_lock_names())
+                          if self._goal_region_policy() != _ps.GoalRegionUnlockPolicy.option_none
+                          else ())
+                _runes = tuple(self._required_runes())
+                _rune_count = self._great_runes_required_count()
+                rule = lambda state, lk=_locks, rn=_runes, n=_rune_count, p=self.player: (
+                    state.has_all(lk, p)
+                    and sum(1 for gr in rn if state.has(gr, p)) >= n)
+            else:
+                lock = f"{r} Lock"
+                rule = lambda state, l=lock: state.has(l, self.player)
+            src.connect(reg, f"To {r}", rule=rule)
+        if _natural or _vanilla or _bingo_active(self):
+            # ZERO synthetic locks, but MANY features still reason "region R is open" as
+            # has("<R> Lock") (boss_locks, the finale's own Ashen Capital Lock, ...). Rather than teach each one about this mode, place "<R> Lock" as an
+            # AP EVENT (code=None -> never in the item pool, never granted to the client, never a
+            # received item) inside each region, reachable exactly when the region is: has("<R> Lock")
+            # then means precisely "you can reach R via its real vanilla keys", so every existing
+            # lock-gated rule keeps working UNCHANGED and the player still receives no synthetic lock.
+            for r, reg in created.items():
+                ev = GFLocation(self.player, f"{r} Reached", None, reg)
+                ev.place_locked_item(GFItem(f"{r} Lock", ItemClassification.progression, None, self.player))
+                reg.locations.append(ev)
+        for f in _FEATURES:
+            f.create_regions(self)
+
+    def set_rules(self) -> None:
+        required = self._required_runes()
+        player = self.player
+        policy = self._goal_region_policy()
+        region_requirement = policy != _ps.GoalRegionUnlockPolicy.option_none
+        if _np.is_on(self) or _vp.is_on(self):
+            # natural_progression mints NO region locks, so has_all([]) would be vacuously true: the
+            # goal is instead REACHING the goal region (Leyndell -- whose entrance carries the
+            # 2-Great-Rune wall in this mode, owned by features/natural_progression, not by a
+            # Lock -- reached through the real-key gate graph -> a genuine spine.
+            #
+            # ...unless Leyndell is not in this seed. Under `dlc_only` every BASE region is dropped,
+            # Leyndell is never created, and `can_reach("Leyndell")` raised KeyError out of AP's
+            # region cache -- inside the completion lambda, which BaseClasses evaluates on EVERY
+            # fill_restrictive batch regardless of accessibility, so the crash landed in pre_fill.
+            # Latent since this mode's birth commit (28d0540); found by the fuzz gate
+            # (GF-fuzz-573519869-0021: natural_progression + dlc_only). goal_locations.py already
+            # ruled that the goal is "never a hardcoded region" -- honour that here rather than
+            # banning the combination: ask it what the END of THIS kept set is (DLC finale first,
+            # else the deepest kept region), so the mode degrades to a playable seed instead of a
+            # stack trace.
+            _kept_now = self._kept()
+            # An explicit `goal` choice wins here too, or natural_progression would complete on the
+            # capital while goalLocations named a different region's boss -- two terminal claims.
+            _choice = getattr(self, "gf_goal_choice", "auto")
+            goal = _gl.goal_region(_choice) or GOAL_REGION
+            if goal not in _kept_now:
+                # (no local `import ... as _gl` here: it would shadow the module-level binding
+                # used two lines above and raise UnboundLocalError.)
+                _derived, _ = _gl.terminal_goal_ids(
+                    _kept_now, _choice, finale_built=getattr(self, "gf_finale_active", False))
+                # The derived goal may be the CONDITIONAL finale region (data.FINALE_REGION, "Ashen
+                # Capital"): not in REGIONS, never rolled, created by features/finale.py only when
+                # its requirements are kept. Legitimate when it exists and a KeyError when it does
+                # not -- exactly the bug being fixed -- so check that it is really built before
+                # handing it to can_reach.
+                _built = set(_kept_now) | {HUB}
+                if getattr(self, "gf_finale_active", False):
+                    _built.add(FINALE_REGION)
+                goal = _derived if _derived in _built else HUB
+                logging.getLogger(GAME).info(
+                    "[greenfield] %s is not in this seed's kept regions; natural-progression goal "
+                    "derived from the kept set instead: %s", GOAL_REGION, goal)
+            if required:
+                need = self._great_runes_required_count()
+                self.multiworld.completion_condition[player] = \
+                    lambda state, g=goal, rr=region_requirement, rn=required, n=need, p=player: (
+                        (not rr or state.can_reach(g, "Region", p))
+                        and sum(1 for gr in rn if state.has(gr, p)) >= n)
+            else:
+                self.multiworld.completion_condition[player] = \
+                    lambda state, g=goal, rr=region_requirement, p=player: (
+                        not rr or state.can_reach(g, "Region", p))
+        else:
+            # Completed-region mode uses held locks only as a generation-time reachability proxy;
+            # the wire omits them and the client gates on actual checked locations. `none` removes
+            # this axis entirely.
+            locks = self.kept_lock_names() if region_requirement else []
+            if required:
+                need = self._great_runes_required_count()
+                self.multiworld.completion_condition[player] = \
+                    lambda state, lk=locks, rn=required, n=need: (
+                        state.has_all(lk, player)
+                        and sum(1 for gr in rn if state.has(gr, player)) >= n)
+            else:
+                self.multiworld.completion_condition[player] = \
+                    lambda state, lk=locks: state.has_all(lk, player)
+        # ABILITY UNLOCKS (#980 follow-up): when progressive mode requires them, the goal ALSO needs
+        # every pooled 'Unlock: X' held -- an independent AND term on whatever goal was built above,
+        # exactly like a required Great Rune. Single-sourced with goalRequiredItems through
+        # _required_ability_unlocks so the AP-side and client-side terminal conditions cannot drift.
+        _ability_unlocks = self._required_ability_unlocks()
+        if _ability_unlocks:
+            _goal_base = self.multiworld.completion_condition[player]
+            self.multiworld.completion_condition[player] = \
+                lambda state, b=_goal_base, un=_ability_unlocks, p=player: (
+                    b(state) and state.has_all(un, p))
+        for f in _FEATURES:
+            f.set_rules(self)
+
+    # ---- client contract ------------------------------------------------------
+    def _options_echo(self) -> Dict[str, Any]:
+        """The sd["options"] sub-dict (contract.OPTIONS_SUBKEYS). F1 fix (2026-07-06): the client's
+        runtime-option parsers read slot_data["options"][<key>] (er-logic/src/options.rs
+        parse_bool_option et al.), but the features only emitted TOP-LEVEL copies -- so death_link/
+        enable_dlc/no_weapon_requirements/scaling knobs were silently dark with "slot_data OK".
+        Emitted CENTRALLY here (features never write into `options`), contract-validated at gen;
+        the features' top-level emissions remain as legacy duplicates.
+
+        ⚠️ NOT every entry is a plain echo. `completion_scaling_floor` is UNIT-CONVERTED here (percent
+        -> HP multiplier) because the client parses it as a multiplier; its top-level legacy copy
+        keeps the percent. Same name, two units, one deliberate conversion -- see
+        features/scaling.floor_multiplier and tests/test_gf_scaling_floor_units.py.
+
+        🛑 NO BARE LITERALS. Every value here must be READ or RESOLVED from an option. A
+        constant in this dict silently overrides the gated top-level copy the feature emits, and
+        the player has no way to see it: that is exactly #408, where `completion_scaling: 4` made
+        `enemy_scaling: false` unreachable while the top-level copy read a correct 0."""
+        from .scaling_ladder import (ceiling_multiplier as scaling_ceiling_multiplier,
+                                     floor_multiplier as scaling_floor_multiplier)
+        from .features.scaling import (blessing_mode as scaling_blessing_mode,
+                                       completion_scaling_id as scaling_completion_id,
+                                       resolved_max_difficulty as scaling_resolved_max_difficulty)
+
+        from .features.goal_locations import required_boss_flags
+
+        def _opt(name: str, default: int = 0) -> int:
+            o = getattr(self.options, name, None)
+            return int(o.value) if o is not None else default
+        # RESOLVED DLC bool, mirroring _eligible_regions: dlc_only implies on.
+        dlc_only = bool(getattr(self.options, "dlc_only", None) and self.options.dlc_only.value)
+        enable_dlc = bool(getattr(self.options, "enable_dlc", None) is None
+                          or self.options.enable_dlc.value)
+        return {
+            contract.DUNGEON_SWEEP: _opt("dungeon_sweep", 3),
+            contract.DEATH_LINK: _opt("death_link"),
+            "required_boss_flags": required_boss_flags(self),
+            contract.DEATH_LINK_AMNESTY_INBOUND: _opt("death_link_amnesty_inbound", 1),
+            contract.DEATH_LINK_AMNESTY_OUTBOUND: _opt("death_link_amnesty_outbound", 1),
+            contract.TRAP_LINK: _opt("trap_link"),
+            contract.ENABLE_DLC: int(dlc_only or enable_dlc),
+            contract.NO_WEAPON_REQUIREMENTS: _opt("no_weapon_requirements"),
+            # Two capabilities the client has implemented for months and no seed could turn on --
+            # the apworld never emitted either key, so `parse_bool_option` read false for every
+            # player. features/body_tuning.py declares the options; this is the copy the client
+            # actually reads (no_equip_load.rs / no_fall_damage.rs set_enabled).
+            contract.NO_EQUIP_LOAD: _opt("no_equip_load"),
+            contract.NO_FALL_DAMAGE: _opt("no_fall_damage"),
+            # THE COPY THE CLIENT READS. er-logic parse_scaling_config short-circuits on this key
+            # (options::parse_bool_option), so it -- not the top-level legacy copy -- is what arms
+            # or disarms the whole sweep. It was a BARE LITERAL 4 until 2026-08-06 (#408): a seed
+            # with `enemy_scaling: false` emitted 0 top-level and 4 here, the client read the 4, and
+            # the option was unreachable from yaml. Resolved through the SAME function the feature's
+            # copy uses, so the two cannot drift apart again (nonzero = on; 4 = smoothstep).
+            contract.COMPLETION_SCALING: scaling_completion_id(self),
+            # UNIT CONVERSION, NOT AN ECHO. The client reads this as an HP MULTIPLIER
+            # (er-logic/scaling.rs floor_tier_from_multiplier); the option is a PERCENT. Emitting the
+            # raw percent here -- as this line did until 2026-07-27 -- pinned every enemy to the top
+            # tier for any value above 3. See features/scaling.floor_multiplier for the full story.
+            #
+            # ⚠️ THE OPTION AND THE WIRE KEY HAVE DIFFERENT NAMES ON PURPOSE. The yaml option was
+            # renamed to `minimum_enemy_difficulty` for legibility; the slot_data key stays
+            # `completion_scaling_floor` because a RELEASED client reads it and the contract hash is
+            # part of the connect handshake. Renaming a player-facing knob is free; renaming a wire
+            # key is a client release plus every seed already rolled.
+            contract.COMPLETION_SCALING_FLOOR: scaling_floor_multiplier(
+                _opt("minimum_enemy_difficulty")),
+            # The MIRROR of the floor: an HP multiplier capping the tier. 100 (default) resolves to
+            # the top rung, i.e. no cap -- emitted as a constant like the rest of this echo rather
+            # than appearing only when set, so the key's presence never itself carries meaning.
+            # `auto` (the default) is resolved HERE, through the same fn generate_early validates
+            # with, so the cap the client reads is the cap that was checked. num_regions 0 = all.
+            contract.COMPLETION_SCALING_CEILING: scaling_ceiling_multiplier(
+                scaling_resolved_max_difficulty(self)),
+            # DERIVED, never the raw legacy option (0 off / 1 anywhere / 2 anywhere+catchup /
+            # 3 dlc_only+catchup). `global_scadutree_blessing` was split on 2026-08-06 into
+            # scadutree_blessing_scope + dlc_blessing_catchup; reading the deprecated key here would
+            # emit 0 for every player who used the new names and the setting would evaporate with
+            # slot_data reporting OK -- #408's exact shape, in the exact dict #408 was about.
+            contract.GLOBAL_SCADUTREE_BLESSING: scaling_blessing_mode(self),
+            contract.AUTO_UPGRADE: _opt("auto_upgrade"),  # 0 off; nonzero = raise received weapons to your live held level (features/upgrades.py)
+            **({contract.AUTO_UPGRADE_FROM_STONES: 1}
+               if _opt("auto_upgrade_from_stones") else {}),
+            # 0 off; nonzero = the client equips each received weapon / armour piece on arrival
+            # (features/auto_equip.py -> auto_equip.rs). The VALUE rides here like every other
+            # runtime toggle; the client-feature TAG that stops an older client silently ignoring it
+            # is emitted by the feature, because only the feature knows the seed actually uses it.
+            contract.AUTO_EQUIP: _opt("auto_equip"),
+            contract.MARIO_MODE: _opt("mario_mode"),
+            # Omit the optional off value to preserve existing seed payloads exactly.
+            **({contract.MARIO_STAT_UPGRADES: _opt("mario_stat_upgrades")}
+               if _opt("mario_stat_upgrades") else {}),
+            **({contract.MARIO_FLUDD: _opt("mario_fludd")}
+               if _opt("mario_fludd") else {}),
+            **({contract.MARIO_CAPPY: _opt("mario_cappy")} if _opt("mario_cappy") else {}),
+            **({contract.MARIO_SONIC_MOVEMENT: _opt("mario_sonic_movement")}
+               if _opt("mario_sonic_movement") else {}),
+            contract.REVEAL_SWEEP_BOSS_NAMES: _opt("reveal_sweep_boss_names"),
+            # 0 keeps the possession-based goal gate; 1 requires every progression-surface check
+            # in every required non-goal region (with viewed shop rows supplied by the client).
+            contract.GOAL_REGION_UNLOCK_POLICY: _opt("goal_region_unlock_policy"),
+            # 0 off; nonzero = opening a merchant's buy menu sets the Twin Maidens hand-in flag
+            # for that merchant's Bell Bearing (features/merchant_bells.py -> merchant_bells.rs).
+            # 🛑 THIS LINE WAS MISSING FROM 2026-08-10 (#509) TO ITS FIX, AND THE FEATURE WAS DARK
+            # FOR EVERY SEED THAT TURNED IT ON. Both halves shipped -- the client baked its 38-row
+            # table and armed the detour, contract.py declared the sub-key naming THIS function as
+            # its producer, CONTRACT.md documented it -- and the one line that joins them was never
+            # written. Nothing red: the sub-key is `required=False`, so validate_slot_data's MISSING
+            # arm never fires, and OPTIONS_SUBKEYS is not folded into CONTRACT_HASH, so the client
+            # printed `VERSION: OK` / `slot_data OK` and then read false. The only visible trace was
+            # a seed emitting requiresClientFeatures ["merchant_bells_on_talk"] to a client that
+            # implements it, accepts the handshake, and is handed no value to act on.
+            # test_gf_options_echo_covers_its_producers.py is the gate; see #408 for the same shape.
+            contract.MERCHANT_BELLS_ON_TALK: _opt("merchant_bells_on_talk"),
+            contract.FLATTEN_REGULAR_UPGRADES: _opt("flatten_regular_upgrades"),  # 0 off (vanilla 2/4/6); 1..4 stones/level
+            # ability-lock (#945): a SORTED name list read straight from the OptionSet (empty =
+            # nothing locked). Not a bare literal -- resolved from world.options; the client folds
+            # it via parse_ability_lock. STR_LIST subkey, so it moves no contract hash.
+            contract.LOCKED_ABILITIES: sorted(self.options.locked_abilities.value),
+            # co-op difficulty (#993): extra enemy-scaling tiers per co-op partner. 0 = off. Read
+            # straight from the Range; the client (scaling.rs coop_tier_bump) counts partners from
+            # its own phantom census and bumps the applied region tier. NOT required and needs no
+            # client-feature tag -- a client that ignores this key just plays at un-bumped co-op
+            # difficulty. Needs enemy_scaling ON to do anything (no tier to bump otherwise).
+            contract.COOP_DIFFICULTY: _opt("coop_difficulty"),
+            # #1091: direct NpcParam/GameAreaParam rune payouts follow the selected combat tier.
+            # Golden Rune goods are not params touched by the client and remain fixed-value items.
+            contract.SCALE_RUNE_REWARDS: _opt("scale_rune_rewards"),
+            # Region Sync (#1005): seamless-co-op region sharing. 0 = off. Read straight from the
+            # Toggle; the client (region_sync.rs) joins the RegionSync link group, broadcasts this
+            # slot's region-opens and applies everyone else's. ACCESS ONLY -- the applied open is
+            # the same flag write a received Lock makes, so no item is granted and nothing here or
+            # in Fill/logic/goal changes. The client-feature TAG that stops an older client
+            # silently ignoring it (and leaving its player kicked) is emitted by the feature,
+            # because only the feature knows the seed actually asked for it.
+            contract.REGION_SYNC: _opt("region_sync"),
+        }
+
+    def _item_counts(self) -> Dict[str, int]:
+        # Every multi-grant is a quantity-specific AP item. Category bundles used to put their count
+        # on the BASE id, which also multiplied vanilla source lots; lot_stacks now owns both the
+        # exact vanilla quantities and the separate curated bundle ids.
+        counts = {}
+        for _k, _v in _FEATURE_ITEM_COUNTS.items():
+            counts[_k] = _v
+        return counts
+
+    # The generated data's own identity (gen_data.py writes _gen_stamp.json beside the modules). It
+    # rides in `versions` so a bug report says WHICH generated data the seed used -- the client and the
+    # apworld ship separately, and "it's broken" with no versions is a report we cannot chase.
+    @staticmethod
+    def _data_inputs_hash() -> str:
+        # ZIP-SAFE read: an installed apworld is a zip, so open(__file__-path) fails and every zipped
+        # release would otherwise ship an EMPTY data-inputs hash in its version handshake (silent, but
+        # wrong). importlib.resources reads through the loader in both the zip and unpacked cases; the
+        # on-disk open() stays as the fallback for a source-tree load with no package context.
+        try:
+            import json as _json
+            raw = None
+            _pkg = __package__ or ""
+            if _pkg:
+                try:
+                    import importlib.resources as _ir
+                    raw = _ir.files(_pkg).joinpath("_gen_stamp.json").read_text(encoding="utf-8")
+                except Exception:
+                    raw = None
+            if raw is None:
+                _p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "_gen_stamp.json")
+                with open(_p, encoding="utf-8") as _fh:
+                    raw = _fh.read()
+            return _json.loads(raw).get("inputs_hash", "")
+        except Exception:
+            return ""
+
+    def _base_slot_data(self) -> Dict[str, Any]:
+        kept = self._kept()
+        loc_flags: Dict[str, List[int]] = {}
+        for rn in [HUB] + kept:
+            for (_n, ap_id, flag) in self._seed_locations(rn):
+                # scalar {ap_id: flag} -- the client reads locationFlags via i64_to_u32_map (scalar),
+                # NOT a list; a [flag] value parsed to EMPTY -> no detection table -> checks never
+                # registered and goal was checked-fallback (2026-07-06). One flag per location.
+                loc_flags[str(ap_id)] = flag
+        # FEATURE-OWNED LOCATIONS (documented seam, pairs with create_items above): without this
+        # merge a feature-created location is undetectable -- the flag poll never registers it and
+        # the coverage gate's detection check fires (which is exactly how a missed merge is caught).
+        for ap_id, flag in getattr(self, "gf_extra_location_flags", {}).items():
+            loc_flags[str(ap_id)] = int(flag)
+        region_open = {f"{r} Lock": REGION_OPEN_FLAGS[r] for r in kept if r in REGION_OPEN_FLAGS}
+        # ...plus the Ashen Capital, which is not KEPT (never rolled) but is LOCKED. Without this
+        # its coarse key above would name an item the client has no open flag for.
+        if getattr(self, "gf_finale_active", False) and FINALE_REGION in REGION_OPEN_FLAGS:
+            region_open[ASHEN_LOCK] = REGION_OPEN_FLAGS[FINALE_REGION]
+        # THE TRACKER'S REGION MODEL, per seed. Built from the SAME `[HUB] + kept` walk as loc_flags
+        # above, so a location can never be in one and missing from the other -- which is exactly
+        # what a separately-generated client table could not promise. Feature-owned locations ride
+        # along through `gf_extra_location_regions` for the same reason loc_flags has that seam.
+        loc_regions: Dict[str, List[int]] = {}
+        for rn in [HUB] + kept:
+            ids = [int(ap_id) for (_n, ap_id, _f) in self._seed_locations(rn)]
+            if ids:
+                loc_regions[rn] = ids
+        # FEATURE-OWNED LOCATIONS, the same seam loc_flags uses above -- and the reason this is a
+        # REVERSE LOOKUP rather than a second `gf_extra_location_*` attribute: the finale
+        # (features/finale.py) publishes Ashen Capital's checks through gf_extra_location_flags, and
+        # Ashen Capital is deliberately NOT in data.REGIONS (it is conditional, never rollable). So
+        # the `[HUB] + kept` walk above cannot see it, and an attribute only this code reads would
+        # have to be populated by every future feature that mints a location -- i.e. it would be
+        # forgotten exactly once and then be wrong forever.
+        # SHIPPED WRONG ONCE (2026-07-28, caught by a smoke-test log): loc_flags carried 4879 ids
+        # while loc_regions carried 4869, so the finale's 10 checks had a flag and no region. The
+        # tracker cannot group them, and core.rs uses `region_table.contains_key` as its "is this
+        # location ours?" test, so a hint for one of them from another player was dropped.
+        _ap_region = {int(ap): rn for rn, rows in LOCATIONS.items() for (_n, ap, _f) in rows}
+        _regioned = {i for ids in loc_regions.values() for i in ids}
+        _unplaced = []
+        for ap_id in loc_flags:
+            ap_id = int(ap_id)
+            if ap_id in _regioned:
+                continue
+            rn = _ap_region.get(ap_id)
+            if rn is None:
+                _unplaced.append(ap_id)
+                continue
+            loc_regions.setdefault(rn, []).append(ap_id)
+        if _unplaced:
+            # Refuse rather than ship a location the tracker cannot place. An id in locationFlags
+            # with no home in LOCATIONS is a feature minting a check out of nothing.
+            raise Exception(
+                "locationFlags carries %d ap id(s) with no region in data.LOCATIONS: %s. Every "
+                "emitted location must be placeable, or the client cannot group it and treats it "
+                "as another world's." % (len(_unplaced), sorted(_unplaced)[:10]))
+        for _rn in loc_regions:
+            loc_regions[_rn] = sorted(set(loc_regions[_rn]))
+        # COARSE key per fine region: which region's lock decides in-logic. "" = always accessible.
+        # A region with locations but NO lock and no host mapping would silently become its own
+        # coarse key and then find no lock item, reading as "open" forever -- so it is a hard error
+        # here rather than a quiet permissive default in the client.
+        # There is no lockless region any more. `_lockless_host = {FINALE_REGION:
+        # FINALE_HOST_REGION}` lived here until 2026-08-06 because the Ashen Capital had locations
+        # and no lock, so its space had to be gated by Leyndell's. SPEC-ashen-capital-lock gave it
+        # a Lock, a front-door open flag (region_open_flags.py) and its own measured kick buckets
+        # (region_groups.py), so it takes the ordinary `rn in REGION_OPEN_FLAGS` branch and the
+        # kick enforces it in its own right instead of borrowing the capital's. The raise below is
+        # now the ONLY fallback, which is the point: a region with checks and no gate of its own
+        # would read as permanently accessible to the client.
+        coarse_keys: Dict[str, str] = {}
+        for rn in loc_regions:
+            if rn == HUB:
+                coarse_keys[rn] = ""
+            elif rn in REGION_OPEN_FLAGS:
+                coarse_keys[rn] = rn
+            else:
+                raise Exception(
+                    f"region {rn!r} has locations but no region-open flag and no lockless-host "
+                    f"mapping: the client would treat it as permanently accessible. Give it a lock "
+                    f"or a host.")
+        versions = contract.version_string(self._data_inputs_hash())
+        required = self._required_runes()
+        required_count = self._great_runes_required_count()
+        return {
+            # WHICH CONTRACT THIS SEED SPEAKS (#1463). The client used to infer it by sniffing for
+            # `locationIdsToKeys`; it now reads this and validates the seed against the profile it
+            # names, so a seed carrying the wrong key family is a connect-time error instead of a
+            # silently mis-chosen branch.
+            contract.PROFILE: contract.GREENFIELD,
+            contract.VERSIONS: versions,           # apworld/contract/data identity -- the skew gate
+            contract.WORLD_LOGIC: "region_lock",
+            contract.LOCATION_FLAGS: loc_flags,
+            contract.AP_IDS_TO_ITEM_IDS: _AP_IDS_TO_ITEM_IDS,
+            contract.ITEM_COUNTS: self._item_counts(),
+            # vanilla_placement receives no "<Region> Lock", so every one of these flags would
+            # stay dark forever; the client treats a region absent from this map as UNLOCKED,
+            # which is the correct answer when the base game owns the gating.
+            # Bingo has no region gates. An empty map lets the tracker show open regions
+            # without unlocking extra anchor graces under the curated travel option.
+            contract.REGION_OPEN_FLAGS: {} if _vp.is_on(self) or _bingo_active(self) else region_open,
+            contract.LOCATION_REGIONS: loc_regions,
+            contract.REGION_COARSE_KEYS: coarse_keys,
+            contract.OPTIONS: self._options_echo(),
+            "region_count": len(kept),
+            "completionScalingBasis": 1,
+            # {str(i32 region id): i32 target} per the contract; the old {region NAME: float 0..1}
+            # form was silently unparseable client-side (er-logic scaling.rs i32_i32_map drops
+            # non-i32 keys -> empty -> scaling refused to arm). Transitional {}: the live scaling
+            # wire is regionSphereTargetRanges, emitted by features/scaling.py (I2).
+            contract.REGION_SPHERE_TARGETS: {},
+            # ending goal contract (client shows/validates the goal). great_runes_required is the
+            # EFFECTIVE (clamped) count; ending_condition reflects the resolved goal, which is
+            # region_locks whenever no Great Rune is actually required this seed.
+            "ending_condition": "great_runes" if required_count else "region_locks",
+            "great_runes_required": required_count,
+            "great_rune_items": list(required),
+        }
+
+    def fill_slot_data(self) -> Dict[str, Any]:
+        sd = registry.merge_slot_data(self._base_slot_data(), _FEATURES, self)
+        sd[contract.LOCK_HINT_PLACEMENTS] = _lock_hint_placements(
+            self.multiworld.get_locations(), self.player,
+            set(sd.get(contract.REGION_OPEN_FLAGS, {})))
+        contract.validate_slot_data(sd, strict=True)
+        return sd
+
+    def write_spoiler(self, spoiler_handle) -> None:
+        # Seed provenance + config, dumped so a seed is judgeable from its spoiler alone (no client
+        # log needed): the completion-scaling gradient AND the full slot_data the client will receive.
+        import json
+        from .features import scaling as _sc
+        name = self.multiworld.get_player_name(self.player)
+        kept = self._kept()
+        # Show what the client ACTUALLY receives: the TRUE per-seed fill-sphere targets (the same
+        # computation features/scaling.py wires into regionSphereTargetRanges), NOT the spine-order
+        # reference gradient. Only when the fill spheres can't be computed (no completed fill) do we
+        # fall back to the spine-order ramp -- labelled as such so the table can't be mistaken for the
+        # live wire. (Historically this table always printed the spine ramp, which read like a
+        # regression to spine-order scaling even though the wire was fill-sphere correct.)
+        region_sphere = _sc._region_fill_spheres(self)
+        if region_sphere:
+            # the same computation the wire uses: fill spheres -> total topological order with
+            # seed-deterministic tie-breaks -> position ramp (features/scaling.py, ORDER RAMP).
+            order = _sc._order_from_spheres(region_sphere, _sc._order_rng(self))
+            # 🛑 THE RAMP HAS TO BE PASSED. `_targets_from_order` defaults to ramp_pct=100 (the even
+            # ramp), and the WIRE calls it with ramp_pct_from_speed(difficulty_ramp_speed) -- so
+            # omitting it here printed a table that was not the seed being played. Measured
+            # 2026-08-05 on a difficulty_ramp_speed: 50 seed: this table said Altus 2857 while the
+            # client resolved 5714 and applied tier 11, and every region above position 3 was
+            # actually pinned at TARGET_MAX. The spoiler is the only place a player can see the
+            # curve, so a spoiler that silently prints a DIFFERENT curve is worse than none.
+            ramp = _sc.ramp_pct_from_speed(self.options.difficulty_ramp_speed.value)
+            region_target = _sc._targets_from_order(order, ramp)
+            basis = f"fill-sphere order ramp, difficulty_ramp_speed {self.options.difficulty_ramp_speed.value} (ramp_pct {ramp})"
+        else:
+            triples = _sc.sphere_target_ranges(kept)
+            pid_target = {lo: t for (lo, _hi, t) in triples}
+            region_target = {r: max((pid_target.get(pp, 0) for pp in _sc.SCALING_PLAY_IDS.get(r, [])), default=0)
+                             for r in kept}
+            basis = "spine-order FALLBACK (fill spheres unavailable)"
+        if region_target:
+            spoiler_handle.write(f"\n\nElden Ring ({name}) completion-scaling spheres "
+                                 f"(target / {_sc.TARGET_MAX}; basis: {basis}):\n")
+            for region in sorted(region_target, key=lambda r: (region_target[r], r)):
+                spoiler_handle.write(f"  {region:<28} {region_target[region]}\n")
+        # progression_surface: record the resolved feasibility-ladder rung + how many locks confined
+        # vs spilled to the pool, so a seed's progression confinement is judgeable from the spoiler.
+        _psr = getattr(self, "gf_prog_surface_resolved", None)
+        if _psr is not None:
+            _pl = getattr(self, "gf_prog_surface_placed", "?")
+            _sp = getattr(self, "gf_prog_surface_spilled", "?")
+            _spn = getattr(self, "gf_prog_surface_spilled_names", None)
+            spoiler_handle.write(
+                f"\nElden Ring ({name}) progression surface: resolved rung {_psr} "
+                f"-- {_pl} progression items confined to surface, {_sp} spilled to pool"
+                + (f": {', '.join(_spn)}" if _spn else "") + ".\n")
+        from . import pool_report as _pr
+        _pr.write_spoiler(self, spoiler_handle)
+        try:
+            sd = self.fill_slot_data()
+            spoiler_handle.write(f"\nElden Ring ({name}) slot_data ({len(sd)} keys) -- exactly what the client receives:\n")
+            for k in sorted(sd):
+                v = sd[k]
+                rv = repr(v)
+                if len(rv) > 220:
+                    n = len(v) if hasattr(v, "__len__") else "?"
+                    rv = rv[:220] + f"  ...(+{type(v).__name__}, {n} entries)"
+                spoiler_handle.write(f"  {k} = {rv}\n")
+        except Exception as e:
+            spoiler_handle.write(f"  (slot_data dump failed: {e!r})\n")
+
+    def generate_output(self, output_directory: str) -> None:
+        # Post-fill CHECK BREAKDOWN, printed to the generate log so a seed can be judged on
+        # progression shape + filler locality at a glance (not just "it genned"): how each of this
+        # slot's checks was filled -- own progression / own useful / own (local) filler / another
+        # world's item (foreign), split useful vs filler. Solo seeds show foreign = 0.
+        p = self.player
+        prog = useful = local_filler = foreign_filler = foreign_useful = 0
+        for loc in self.multiworld.get_locations(p):
+            it = loc.item
+            if it is None:
+                continue
+            important = bool(it.advancement) or bool(it.classification & ItemClassification.useful)
+            if it.player == p:
+                if it.advancement:
+                    prog += 1
+                elif it.classification & ItemClassification.useful:
+                    useful += 1
+                else:
+                    local_filler += 1
+            elif important:
+                foreign_useful += 1
+            else:
+                foreign_filler += 1
+        total = prog + useful + local_filler + foreign_filler + foreign_useful
+        print(
+            f"[greenfield] {self.multiworld.get_player_name(p)}: {total} checks | "
+            f"progression {prog} | useful {useful} | local filler {local_filler} | "
+            f"foreign filler {foreign_filler} | foreign useful {foreign_useful}"
+        )
+
+        # --- per-sphere item dump (env ER_GF_DUMP_SPHERES; upgrade-curve analytics) ---------------
+        # get_spheres() is heavy, so compute it ONCE for the whole multiworld (the lowest player id)
+        # and write {player_name: [[item names in sphere 0], [sphere 1], ...]} to JSON. Inert unless
+        # the env var is set. Only reachable, item-bearing locations appear in spheres. NOTE: one AP
+        # item == one check grant, so a vanilla "x3" stack still counts as 1 here (the pool-tuning unit).
+        import os as _os, json as _json
+        if _os.environ.get("ER_GF_DUMP_SPHERES") and self.player == min(self.multiworld.player_ids):
+            try:
+                per_player = {}
+                for sidx, locset in enumerate(self.multiworld.get_spheres()):
+                    for loc in locset:
+                        it = loc.item
+                        if it is None or loc.player not in self.multiworld.player_ids:
+                            continue
+                        pl = per_player.setdefault(self.multiworld.get_player_name(loc.player), [])
+                        while len(pl) <= sidx:
+                            pl.append([])
+                        pl[sidx].append(it.name)
+                fn = _os.path.join(output_directory, f"GF_SPHERES_{self.multiworld.seed_name}.json")
+                with open(fn, "w", encoding="utf-8") as _f:
+                    _json.dump({"seed": str(self.multiworld.seed_name), "spheres": per_player}, _f)
+                print(f"[greenfield] ER_GF_DUMP_SPHERES -> {fn}")
+            except Exception as _e:
+                print(f"[greenfield] ER_GF_DUMP_SPHERES dump failed: {_e!r}")

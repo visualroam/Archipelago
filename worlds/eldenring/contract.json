@@ -1,0 +1,1379 @@
+{
+  "shapes": {
+    "SCALAR_INT_MAP": {
+      "rust": "ScalarIntMap",
+      "client_parser": "i64_to_u32_map / i64_map / str_to_u32"
+    },
+    "LISTVAL_INT_MAP": {
+      "rust": "ListvalIntMap",
+      "client_parser": "str_to_u32vec"
+    },
+    "STR_MAP": {
+      "rust": "StrMap",
+      "client_parser": "{key: str} object"
+    },
+    "TRIPLE_LIST": {
+      "rust": "TripleList",
+      "client_parser": "parse_triples"
+    },
+    "PAIR_LIST": {
+      "rust": "PairList",
+      "client_parser": "startgrants.rs pair parse [[a,b]]"
+    },
+    "INT_LIST": {
+      "rust": "IntList",
+      "client_parser": "arr_i32 / arr_u32"
+    },
+    "STR_LIST": {
+      "rust": "StrList",
+      "client_parser": "arr_str (item names)"
+    },
+    "BOOL": {
+      "rust": "Bool",
+      "client_parser": "as_bool"
+    },
+    "BOOL_OR_INT": {
+      "rust": "BoolOrInt",
+      "client_parser": "parse_death_link / parse_dlc (0/1)"
+    },
+    "INT_OR_BOOL": {
+      "rust": "IntOrBool",
+      "client_parser": "parse_bool_option (nonzero = on)"
+    },
+    "INT": {
+      "rust": "Int",
+      "client_parser": "as_i64"
+    },
+    "NUMBER": {
+      "rust": "Number",
+      "client_parser": "as_f64"
+    },
+    "STR": {
+      "rust": "Str",
+      "client_parser": "as_str"
+    },
+    "NESTED_GRANTS": {
+      "rust": "NestedGrants",
+      "client_parser": "progressive.rs custom"
+    },
+    "FLASK_LADDER": {
+      "rust": "FlaskLadder",
+      "client_parser": "progressive.rs flask reconcile"
+    },
+    "OPTIONS_DICT": {
+      "rust": "OptionsDict",
+      "client_parser": "options::parse_*_option sub-dict"
+    },
+    "LOCK_PLACEMENTS": {
+      "rust": "LockPlacements",
+      "client_parser": "lock_hint_economy::parse_placements"
+    },
+    "ANY": {
+      "rust": "Any",
+      "client_parser": "(diagnostic / foreign profile; unvalidated)"
+    }
+  },
+  "game": "Elden Ring",
+  "keys": [
+    {
+      "name": "apIdsToItemIds",
+      "shape": "SCALAR_INT_MAP",
+      "required": true,
+      "profiles": [
+        "both"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "core.rs:309 i64_map",
+      "doc": "AP item id (str) -> ER FullID granted on receipt."
+    },
+    {
+      "name": "abilityUnlockItems",
+      "shape": "STR_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/ability_lock.py or features/mario_mode.py (mutually exclusive)",
+      "consumer": "er-logic ability_lock or mario capabilities receive path",
+      "doc": "synthetic AP item id (str) -> ability name (jump/crouch/roll/r1/r2/l1/l2). Present only under ability_lock_mode: progressive: the abilities start locked (options.locked_abilities) and each rides one shuffled 'Unlock: X' item; receiving that item id unlocks the ability (er_logic ability_lock::unlock). Same shape as armorBundles -- the game is never asked to grant these, the client resolves them by this map. A seed that emits it also emits requiresClientFeatures ['ability_unlock']. Mario Mode uses the same map for its advanced move keys and instead requires mario_capabilities_v1; native locked_abilities cannot be combined with it. Mario Stat Upgrades additionally maps progressive_health and progressive_power and requires mario_stats_v1; the stat keys are absent when that option is off. Mario FLUDD maps fludd_hover, fludd_rocket, fludd_turbo and progressive_fludd_tank and requires mario_fludd_v1; these keys are absent when FLUDD is off. Cappy maps cap_throw/cap_bounce with mario_cappy_v1; Sonic movement maps spin_dash/drop_dash/air_dash with mario_sonic_movement_v1. Each addon maps its keys only when enabled."
+    },
+    {
+      "name": "armorBundles",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/armor_bundles.py",
+      "consumer": "core.rs armor-bundle receive reconciler",
+      "doc": "synthetic armor-set AP item id (str) -> every protector FullID in its generated family."
+    },
+    {
+      "name": "locationFlags",
+      "shape": "SCALAR_INT_MAP",
+      "required": true,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "core.rs:517 (key_resolver first, this as fallback)",
+      "doc": "AP location id (str) -> its ER acquisition event flag; the flag-poll detection table."
+    },
+    {
+      "name": "regionOpenFlags",
+      "shape": "SCALAR_INT_MAP",
+      "required": true,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "region.rs:111 str_to_u32 (absent => empty => no locks)",
+      "doc": "'<Region> Lock' -> the region-open event flag set when that lock is received. Keys MUST be exactly '<Region> Lock' matching the coarse lock-item names the client derives from regionCoarseKeys. Usually the region's front-door GRACE, so the Lock lights the way in; for a gated child (region_spine.REGION_PARENT) it is a SYNTHETIC client-owned flag instead, because there the same write must disarm the kick WITHOUT lighting a warp target past the vanilla wall (#278)."
+    },
+    {
+      "name": "lockHintPlacements",
+      "shape": "LOCK_PLACEMENTS",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core.fill_slot_data (post-fill)",
+      "consumer": "lock_hint_economy::parse_placements",
+      "doc": "Lock item NAME -> {player, location}, where player owns the world containing the location. Emitted after fill for this receiving slot's placed region Locks only. This narrow coordinate disclosure lets the custom F6 economy call CreateHints for a Lock in another game without spending normal AP hint points. Missing for old seeds degrades to the client's Spilled/use-!hint fallback."
+    },
+    {
+      "name": "locationRegions",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "er-logic tracker_tables::location_region_table",
+      "doc": "fine region NAME -> [AP location ids in it]. The tracker's grouping. Scoped to THIS seed's kept regions + the hub, exactly like locationFlags -- a location absent here is not in this seed. Sent region->ids rather than id->region because the id list is the bulk and the names repeat (~43 KB vs ~180 KB)."
+    },
+    {
+      "name": "regionCoarseKeys",
+      "shape": "STR_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "er-logic tracker_tables::coarse_table",
+      "doc": "fine region NAME -> COARSE key: the region whose lock decides in-logic. \"\" means ALWAYS ACCESSIBLE (the hub). Usually the region itself; it differs only for a LOCKLESS region whose physical space is gated by another region's lock (the finale -> its host). \ud83d\uded1 SENT, not derived client-side: which region hosts a lockless one is OUR design decision, and re-deriving it in Rust would be a second copy of a convention free to drift from this one."
+    },
+    {
+      "name": "unobtainableLocations",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/unobtainable_locations.py",
+      "consumer": "er-logic tracker_tables::build_tracker_tables -> tracker::build_tracker_model hides them",
+      "doc": "AP location ids in THIS seed (always a subset of locationRegions) that cannot be obtained because a reviewed NPC-questline route passes through a region this seed did not keep. Sent, not derived client-side: which region a quest must visit is world data (features/unobtainable_locations.REVIEWED_QUEST_ROUTES). Empty on a full-map seed. AP semantics unchanged: the ids stay in the multiworld as filler-only missable checks; a client that hides them must still SEND them if the player somehow fires the flag."
+    },
+    {
+      "name": "options",
+      "shape": "OPTIONS_DICT",
+      "required": true,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._options_echo",
+      "consumer": "er-logic/options.rs parse_bool_option et al.",
+      "doc": "runtime option echo sub-dict; every client-read option lives here (features' top-level copies are legacy duplicates the client ignores).",
+      "subkeys": [
+        {
+          "name": "dungeon_sweep",
+          "shape": "INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/boss_locks.py)",
+          "consumer": "er-logic/sweep_clause.rs active_members",
+          "doc": "selected sweep rung: 0 = none, 1 = minidungeons, 2 = all, 3 = bosses. The client uses an explicit 0 to remove old baked sweep claims when no sweep table was emitted. Optional for existing seeds, which may omit this echo."
+        },
+        {
+          "name": "required_boss_flags",
+          "shape": "INT_LIST",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/goal_locations.py)",
+          "consumer": "goal.rs parse / is_met",
+          "doc": "additional local boss defeat flags ANDed with the finale; empty preserves old goals. Nonempty requires required_bosses_v1. Does not alter goalLocations or finale access."
+        },
+        {
+          "name": "mario_cappy",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/mario_mode.py)",
+          "consumer": "er-logic Mario Cappy parser",
+          "doc": "optional Cap Throw and Cap Bounce unlocks; absent/false disables Cappy. Requires mario_mode and mario_cappy_v1. Cap Bounce needs a deployed cap."
+        },
+        {
+          "name": "mario_sonic_movement",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/mario_mode.py)",
+          "consumer": "er-logic Mario Sonic parser",
+          "doc": "optional Spin Dash, Drop Dash and Air Dash unlocks; absent/false disables Sonic movement. Requires mario_mode and mario_sonic_movement_v1. No homing."
+        },
+        {
+          "name": "mario_fludd",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/mario_mode.py)",
+          "consumer": "er-logic Mario FLUDD parser",
+          "doc": "optional FLUDD nozzle and tank progression; absent/false disables FLUDD. True shuffles Hover, Rocket and Turbo Nozzles and three tank upgrades, capacity is worker-version dependent: current workers use 300/400/500/600 units; legacy workers use 60/80/100/120. Tank upgrades never refill water. Requires mario_mode and mario_fludd_v1."
+        },
+        {
+          "name": "mario_stat_upgrades",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/mario_mode.py)",
+          "consumer": "er-logic Mario stats parser",
+          "doc": "optional Mario health/power progression; absent/false keeps normal stats. True starts at 4/8 wedges and 75% power, with four health and three power items mapped by abilityUnlockItems. Requires mario_mode and mario_stats_v1."
+        },
+        {
+          "name": "mario_mode",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/mario_mode.py)",
+          "consumer": "er-logic mario capabilities parser",
+          "doc": "experimental er-mario ABI v1 mode; absent/false leaves the bridge inactive. When true advanced capabilities start locked and abilityUnlockItems maps their synthetic AP ids. Requires mario_capabilities_v1."
+        },
+        {
+          "name": "death_link",
+          "shape": "BOOL_OR_INT",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "er-logic/options.rs parse_death_link",
+          "doc": "shared deaths across the multiworld (world.options.death_link)."
+        },
+        {
+          "name": "death_link_amnesty_inbound",
+          "shape": "INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "er-logic/options.rs parse_death_link_amnesty",
+          "doc": "one-in-N gate for received DeathLinks; 1 applies every incoming link."
+        },
+        {
+          "name": "death_link_amnesty_outbound",
+          "shape": "INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "er-logic/options.rs parse_death_link_amnesty",
+          "doc": "one-in-N gate for local deaths broadcast to the multiworld; 1 sends every death."
+        },
+        {
+          "name": "trap_link",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "er-logic/options.rs parse_trap_link",
+          "doc": "nonzero = advertise TrapLink after slot-data parse, send locally received trap items once, and queue compatible inbound linked traps without echoing them."
+        },
+        {
+          "name": "enable_dlc",
+          "shape": "BOOL_OR_INT",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "er-logic/options.rs parse_dlc",
+          "doc": "RESOLVED DLC bool (dlc_only implies on); gates DLC map-reveal flags."
+        },
+        {
+          "name": "no_weapon_requirements",
+          "shape": "BOOL_OR_INT",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "no_weapon_reqs.rs set_enabled",
+          "doc": "zero weapon/shield/catalyst + spell stat requirements."
+        },
+        {
+          "name": "completion_scaling",
+          "shape": "INT_OR_BOOL",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "er-logic/scaling.rs:146 parse_bool_option",
+          "doc": "completion scaling on/off + curve id (nonzero = on; 4 = smoothstep)."
+        },
+        {
+          "name": "completion_scaling_floor",
+          "shape": "NUMBER",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (unit-converted by features/scaling.floor_multiplier)",
+          "consumer": "er-logic/scaling.rs:225 floor_tier_from_multiplier (client reads f64)",
+          "doc": "minimum enemy-scaling tier, as the HP MULTIPLIER of that tier's ladder rung -- NOT the option's percent. 0 = no floor; 1.141..3.703 spans the ladder. The client picks the first tier whose hp >= this value, so sending the raw percent would floor at the TOP tier. The player-facing percent rides in the top-level legacy copy."
+        },
+        {
+          "name": "completion_scaling_ceiling",
+          "shape": "NUMBER",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (unit-converted by scaling_ladder.ceiling_multiplier)",
+          "consumer": "er-logic/scaling.rs ceiling_tier_from_multiplier",
+          "doc": "maximum enemy-scaling tier, as the HP MULTIPLIER of that tier's ladder rung -- the MIRROR of completion_scaling_floor (last rung NO STRONGER than this, vs the floor's first rung at least this strong). The top rung (7.422) means uncapped, which is the default. NOT required: an older client simply never reads it and scales uncapped, which is why a seed that actually caps also sends requiresClientFeatures."
+        },
+        {
+          "name": "global_scadutree_blessing",
+          "shape": "INT",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "scaling.rs scadutree scope",
+          "doc": "Scadutree blessing MODE, DERIVED from scadutree_blessing_scope + dlc_blessing_catchup (the single global_scadutree_blessing Choice was split 2026-08-06 and is now a deprecated alias). 0 = off. 1 = anywhere. 2 = anywhere + DLC catch-up floor. 3 = dlc_only + catch-up -- vanilla scope, but a DLC area never runs under its expected blessing. 3 is the ONLY new value; a client that predates it falls through `mode != 1 && mode != 2` and writes nothing, which is why a mode-3 seed declares requiresClientFeatures ['dlc_blessing_catchup']."
+        },
+        {
+          "name": "auto_upgrade",
+          "shape": "INT",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/upgrades.py)",
+          "consumer": "upgrades.rs set_auto_upgrade / apply_auto_upgrade",
+          "doc": "auto-upgrade received weapons: 0 = off; nonzero = raise each received weapon to the player's highest equivalent level across regular and somber tracks (raise-only, cap +25 regular / +10 somber)."
+        },
+        {
+          "name": "auto_upgrade_from_stones",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/upgrades.py)",
+          "consumer": "stone_upgrade.rs publish / highest_level",
+          "doc": "If on, raise newly received weapons to levels afforded by the complete AP-received smithing-stone history. Absent means off. An enabled seed declares requiresClientFeatures ['stone_auto_upgrade'] so older clients refuse it."
+        },
+        {
+          "name": "auto_equip",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/auto_equip.py)",
+          "consumer": "er-logic/options.rs parse_auto_equip",
+          "doc": "\"use what you get\": nonzero = the client equips every RECEIVED weapon / armour piece the moment it lands in the bag, clobbering the slot (auto_equip.rs enqueue + tick). NOT required: this key is younger than the released clients that read it, and an absent key parses false, which is exactly the off default. That silence is also why a seed with it ON emits requiresClientFeatures [\"auto_equip\"] -- OPTIONS_SUBKEYS is not folded into CONTRACT_HASH, so an older client would report VERSION: OK and then never see this key at all."
+        },
+        {
+          "name": "reveal_sweep_boss_names",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo",
+          "consumer": "core.rs tracker sweep presentation",
+          "doc": "default-off presentation preference: allow the tracker to name sweep bosses whose rows would otherwise be hidden behind a locked region. Does not change sweep membership, firing, placement, or logic; opted-in seeds require the matching client feature tag."
+        },
+        {
+          "name": "goal_region_unlock_policy",
+          "shape": "INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/progression_surface.py)",
+          "consumer": "eldenring-archipelago/core.rs -> region completion goal gate",
+          "doc": "0 = preserve the possession-based goal-region unlock; 1 = wait until every progression-surface check in every required non-goal region is checked, with visible shop rows additionally satisfied by the server-backed viewed-shop ledger; 2 = impose no region-side goal requirement. This is independent of the Great Rune requirement. A seed selecting 1 emits requiresClientFeatures ['region_completion_goal_gate']; OPTIONS_SUBKEYS is not folded into CONTRACT_HASH."
+        },
+        {
+          "name": "no_equip_load",
+          "shape": "INT_OR_BOOL",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/body_tuning.py)",
+          "consumer": "no_equip_load.rs set_enabled",
+          "doc": "ROLL MODE, not a plain toggle (widened 2026-08-12, #548): 0 = off, 1 = light (equipment weighs nothing, always light roll), 2 = medium (ceiling raised enough that no real kit fat-rolls, but armour still costs you). The client multiplies the WEIGHT side with a silent permanent SpEffect because max equip load is recomputed every frame from Endurance; er-logic/equip_load.rs RollMode owns the multipliers. 1 is what the legacy Toggle's `true` put on the wire, which is why light is 1. NOT required, and the asymmetry is deliberate: the capability is OLDER than every released client, an absent key parses false, and 0/1 are read CORRECTLY by an old client -- so tagging them would refuse the connect on clients that already implement the feature. 2 is different: parse_bool_option turns it into a nonzero and the player silently gets LIGHT, the stronger setting they did not ask for, so a seed choosing 2 -- and only 2 -- emits requiresClientFeatures [\"no_equip_load_roll\"]."
+        },
+        {
+          "name": "no_fall_damage",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/body_tuning.py)",
+          "consumer": "no_fall_damage.rs set_enabled",
+          "doc": "nonzero = falling deals no damage (leaving the map still kills). Same age and same no-tag reasoning as no_equip_load above."
+        },
+        {
+          "name": "merchant_bells_on_talk",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/merchant_bells.py)",
+          "consumer": "er-logic/options.rs parse_merchant_bells_on_talk -> merchant_bells.rs on_shop_open",
+          "doc": "nonzero = opening a merchant's regular buy menu sets the event flag the Twin Maiden Husks would have set had you handed them that merchant's Bell Bearing, so their wares are on sale at the hub from then on. The bell ITEM is untouched and stays in the pool -- the range a shop-open reports is the merchant's OWN ShopLineupParam block, and a hand-in adds a menu entry rather than releasing or copying stock, so every shop check keeps its own eventFlag_forStock and fires identically whichever counter it was bought at. The (range -> flag) table is static game data baked into the client by tools/gen_merchant_bells.py, NOT sent. NOT required: an absent key parses false, which is the off default. A seed with it ON emits requiresClientFeatures [\"merchant_bells_on_talk\"] -- OPTIONS_SUBKEYS is not folded into CONTRACT_HASH, so an older client would report VERSION: OK and then never see this key at all."
+        },
+        {
+          "name": "flatten_regular_upgrades",
+          "shape": "INT",
+          "required": true,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/upgrades.py)",
+          "consumer": "upgrades client path",
+          "doc": "standard-weapon stones/level: 0 = off (vanilla 2/4/6), 1..4 = uniform N/level (tuned ~3)."
+        },
+        {
+          "name": "locked_abilities",
+          "shape": "STR_LIST",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/ability_lock.py)",
+          "consumer": "er-logic/options.rs parse_ability_lock",
+          "doc": "abilities the seed disables at the game's LOGICAL action layer (CSChrActionRequestModule.disabled_action_inputs): any of jump, crouch, roll, r1, r2, l1, l2. Keybind- and device-agnostic; menus unaffected. Emitted as a sorted name list (empty = nothing locked). NOT required: an absent key parses to the empty set, which is the off default -- OPTIONS_SUBKEYS is not folded into CONTRACT_HASH, so this key adds no version pairing and an older client simply never reads it."
+        },
+        {
+          "name": "coop_difficulty",
+          "shape": "INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/scaling.py)",
+          "consumer": "er-logic/options.rs parse_coop_difficulty -> scaling.rs coop_tier_bump",
+          "doc": "seamless-co-op difficulty: extra enemy-scaling TIERS added per co-op partner in the world, on top of the region's own tier (#993). 0 (default) = off. Seamless raises enemy HP but leaves enemy DAMAGE at the host default, so a partner halves incoming threat without enemies hitting harder; a higher tier carries both HP and attack, restoring it. Each client counts its own phantom census and applies this identically -- every player is on its own AP slot reading the same world, so no host arbitration. NOT required: an absent key parses 0 (off), and OPTIONS_SUBKEYS is not folded into CONTRACT_HASH, so this adds no version pairing and an older client simply never reads it -- it also needs no requiresClientFeatures, because a client that ignores it merely plays at the un-bumped (current) co-op difficulty."
+        },
+        {
+          "name": "scale_rune_rewards",
+          "shape": "INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/scaling.py)",
+          "consumer": "er-logic/options.rs parse_bool_option -> rune_rewards.rs",
+          "doc": "opt-in direct rune payout scaling (#1091): NpcParam.getSoul and GameAreaParam boss rewards follow the current sphere tier. 0 (default) = vanilla payouts. Golden Rune goods are never in scope. An enabled seed declares requiresClientFeatures [\"rune_reward_scaling\"] so an older client refuses instead of silently ignoring the economy setting."
+        },
+        {
+          "name": "region_sync",
+          "shape": "BOOL_OR_INT",
+          "required": false,
+          "profiles": [
+            "greenfield"
+          ],
+          "producer": "core._options_echo (features/region_sync.py)",
+          "consumer": "er-logic/options.rs parse_region_sync -> region_sync.rs apply_pending",
+          "doc": "seamless-co-op region sharing (#1005): nonzero = advertise the RegionSync link tag, broadcast this slot's region-OPENS to that group, and apply everyone else's by setting the region's regionOpenFlags value and lighting its graces -- the same write a locally received Lock makes, and exactly what the console's `!setflag <region open flag> 1` does today. ACCESS ONLY: it does NOT grant the AP region-Lock ITEM to anyone (Fill's placement is untouched), does not move the receive watermark, sends no check, and changes no logic or goal state -- so generation is identical whether it is on or off. NOT required: an absent key parses false, which is the off default. A seed with it ON emits requiresClientFeatures [\"region_sync\"], because OPTIONS_SUBKEYS is not folded into CONTRACT_HASH and an older client would report VERSION: OK and then leave its player region-kicked out from under the party -- which reads as a broken seed, not an old client."
+        }
+      ]
+    },
+    {
+      "name": "regionSphereTargets",
+      "shape": "SCALAR_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/scaling.py (I2; core emits {} transitional)",
+      "consumer": "er-logic/scaling.rs:148 i32_i32_map",
+      "doc": "{str(i32 region id): i32 target}; flat per-region scaling targets. Keys must parse as i32 (region NAMES are silently dropped by the client -- the 2026-07 dark-scaling bug); ranges (regionSphereTargetRanges) are the live wire."
+    },
+    {
+      "name": "regionSphereTargetRanges",
+      "shape": "TRIPLE_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/scaling.py (I2)",
+      "consumer": "er-logic/scaling.rs:150-165 range parse",
+      "doc": "[[lo,hi,target], ...] play_region/100 sub-id ranges -> scaling target; the live completion-scaling wire (SCALING_WIRE)."
+    },
+    {
+      "name": "scaduBlessingCap",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/scaling.py",
+      "consumer": "er-logic/upgrades.rs apply_blessing_cap",
+      "doc": "Ceiling (0..20) for the Scadutree-blessing curve. Emitted only when the blessing mode != 0. \ud83d\uded1 ABSENT MEANS 'no extra cap' -> the client falls back to the ladder ceiling (20), NOT to 0: a key that read as the floor when absent would ship the whole feature inert, which is the exact bug this option already had once. Exists so the client never has to re-derive the seed's tier model."
+    },
+    {
+      "name": "dlcScadutreeFloorRanges",
+      "shape": "TRIPLE_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/scaling.py",
+      "consumer": "eldenring-archipelago/upgrades.rs floor_for_region (mode 2)",
+      "doc": "[[lo,hi,floor], ...] play_region/100 sub-id ranges -> Scadutree-blessing FLOOR level (0..20) per DLC region. Emitted ONLY when the blessing mode is 2 or 3 (dlc_blessing_catchup on) and >=1 DLC region is kept. Client mode-2 writes max(held-fragment level, region floor) so DLC enemies' blessing assumption is met on arrival. \ud83d\uded1 This key is NOT a DLC-region marker -- use dlcRegionBuckets. The client used to infer DLC-ness from its presence, which is false on every default seed (blessing has defaulted to `off` since 2026-07-18). (The old claim that 'the enemy 70xx sphere scaler is capped in these buckets' was also stale: DLC_ENEMY_TIER_CAP was removed 2026-07-15 and DLC now scales by sphere exactly like base game.)"
+    },
+    {
+      "name": "requiresClientFeatures",
+      "shape": "STR_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/*.slot_data (only when a feature is actually USED)",
+      "consumer": "er-logic/client_features.rs unsupported() -> core.rs connect refusal",
+      "doc": "feature tags this SEED depends on the client understanding. Absent/[] = connects to anything. THE GAP IT CLOSES: the `versions` contract-hash check folds in CONTRACT but NOT OPTIONS_SUBKEYS, so adding a client-consumed OPTION does not move the hash -- an older client reports 'VERSION: OK' and then silently cannot see the key, and a setting the player chose evaporates. Hashing the options sub-dict instead would fire on every harmless addition and train people to ignore it, so a seed declares only what it USES. Add a tag to er-logic SUPPORTED in the same change as the behaviour, never before."
+    },
+    {
+      "name": "dlcRegionBuckets",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/scaling.dlc_region_buckets",
+      "consumer": "er-logic/scaling.rs is_dlc_bucket",
+      "doc": "sorted play_region/100 sub-ids belonging to KEPT DLC regions -- a pure membership set, derived from the region set and independent of every option. Absent when no DLC region is in play. This is the ONLY correct 'is this bucket DLC?' signal; it exists because the previous proxy (dlcScadutreeFloorRanges) is empty by default."
+    },
+    {
+      "name": "completionScalingBasis",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "er-logic/scaling.rs basis parse",
+      "doc": "scaling basis Choice VALUE (int 1 = sphere); client also tolerates the legacy string form ('sphere')."
+    },
+    {
+      "name": "areaLockFlags",
+      "shape": "TRIPLE_LIST",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "(client-derived; folded into regionOpenFlags 2026-07-06)",
+      "consumer": "region.rs derive_area_lock_flags",
+      "doc": "[lo,hi,open_flag] play_region ranges; locked (kicked) while open_flag is unset. FOLDED 2026-07-06: no longer emitted -- the client derives these from regionOpenFlags + its static REGION_PLAY_IDS geometry (area_locks.py holds the mirror authority + a kept-region coverage assert; test_gf_data.py guards table drift). A legacy seed that still sends a non-empty areaLockFlags is honored by the client as-is."
+    },
+    {
+      "name": "lockRevealFlags",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/area_locks.py",
+      "consumer": "region.rs:121 str_to_u32vec",
+      "doc": "'<Region> Lock' -> map-reveal/enforcement flags set on lock receipt, IN WIRE ORDER (both client application sites iterate the parsed Vec in order). Emitted for the DLC map pieces and, since SPEC-ashen-capital-lock, for the Ashen Capital Lock's Erdtree-burn world state -- where the ORDER IS LOAD-BEARING: the burn-done latch must be LAST, because it is common.emevd $Event(900)'s own entry check and setting it first makes the event skip the body that places the Elden Beast's arena. A partial grant must therefore leave it unset, so the reconnect replay can finish the job."
+    },
+    {
+      "name": "capitalBurnFlag",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/capital.py",
+      "consumer": "region.rs configure_capital / tick_capital",
+      "doc": "the Leyndell map-version selector, 9116 (OFF = Royal m11_00, ON = Ashen m11_05 + Elden Throne m19). The client reconciles it to the player's current/target capital so the burn never permanently strands the Royal checks."
+    },
+    {
+      "name": "capitalBurnDoneFlag",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/capital.py",
+      "consumer": "region.rs configure_capital / tick_capital",
+      "doc": "the burn-complete latch, 118 (common.emevd $Event(900)'s last step; monotonic). ARMING GATE: the client never writes 9116 while this reads unset -- the first burn is 100% the game's own sequence."
+    },
+    {
+      "name": "capitalAshenPlayRegions",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/capital.py",
+      "consumer": "er-logic capital.rs via region.rs tick_capital",
+      "doc": "measured play_region buckets where 9116 must be held ON (11050 Ashen Capital, 19000 Elden Throne). KICK id space, same /100 reduction as kick_decision."
+    },
+    {
+      "name": "capitalRoyalPlayRegions",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/capital.py",
+      "consumer": "er-logic capital.rs via region.rs tick_capital",
+      "doc": "measured play_region buckets where 9116 must be held OFF (11000 Royal Capital)."
+    },
+    {
+      "name": "capitalWorldBurnFlag",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/capital.py",
+      "consumer": "er-logic capital.rs via region.rs tick_capital",
+      "doc": "the world's post-burn state flag, 300 -- common.emevd:1293 is its SOLE setter in all 589 EMEVD, and it is READ in five maps plus the Roundtable Hold. Measured in game 2026-08-06: without it the Elden Beast's arena in m19_00 is a VOID the player falls into and dies in; with it, the hub is in its burnt state. Held by POSITION alongside capitalBurnFlag (ON in the ashen buckets, OFF elsewhere) so the rest of the world stays vanilla -- it is reversible, measured, not one-way."
+    },
+    {
+      "name": "capitalPreBurnFlag",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/capital.py",
+      "consumer": "er-logic capital.rs via region.rs tick_capital",
+      "doc": "the OPPOSITE world state, 302 -- set by $Event(901) (the Melina/Forge ceremony, alongside flag 110) and cleared by the burn's own body. Written OFF only where the burn state is written ON; never touched elsewhere."
+    },
+    {
+      "name": "capitalReleaseRows",
+      "shape": "TRIPLE_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/capital.py",
+      "consumer": "shop_flags.rs run_capital_release",
+      "doc": "[ShopLineupParam row, expected release flag, replacement] -- shop-check rows whose eventFlag_forRelease is 9116 itself (Enia's Maliketh armor set) re-key to the monotonic 118 so the reconciler's OFF-default cannot de-stock them."
+    },
+    {
+      "name": "graceAttunement",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/graces.py",
+      "consumer": "region.rs parse_grace_attunement / tick_grace_attunement",
+      "doc": "'<Region> Lock' -> {threshold, members, bloom}: touch `threshold` of `members` (the region's grace warp flags minus the one its Lock already lit) and `bloom` lights. ABSENT for every region the apworld chose not to gate -- the off default (grace_attunement 0) and the small-region skip (members <= threshold), both of which keep the whole-bundle behaviour regionGraces has always had. A seed that emits this also emits requiresClientFeatures ['grace_attunement']: unread, the key leaves the player ONE grace per region with the rest never lighting, which reads as a broken seed rather than an ignored setting."
+    },
+    {
+      "name": "regionGraces",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/graces.py",
+      "consumer": "region.rs:122 str_to_u32vec",
+      "doc": "item_name -> grace warp flags lit when that item is RECEIVED. Keyed by '<Region> Lock' (bundle: all of the region's graces). A GATED CHILD region (region_spine.REGION_PARENT -- Raya Lucaria Academy, Leyndell, Sewer) maps to [] while its vanilla wall is armed in logic: its graces are deliberately NOT granted (the player walks in past the game's own wall and touches them; gated-children fix 2026-07-14). Client MUST light on receipt of ANY keyed item, not just Locks, and MUST treat an empty bundle as intent, not drift."
+    },
+    {
+      "name": "runeGatedGraces",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "CONTRACT: DEAD (unemitted since 2026-07-14)",
+      "consumer": "CONTRACT: DEAD (never built)",
+      "doc": "RETIRED 2026-07-14 (gated-children fix). Was: str(N) -> capital grace flags lit at >= N received Great Runes. The client half was NEVER built (the key appears in contract_gen.rs and in no consumer over the client repo's full history), so armed it could light nothing and disarmed the capital bundle rode the Leyndell Lock past the 2-rune wall (playtest 2026-07-14, East Capital Rampart 71102). Superseded by withholding a gated child's bundle outright -- the GAME's own wall is the gate (features/graces.py). Key kept declared so an old client's parse stays defined."
+    },
+    {
+      "name": "greatRuneItemIds",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "CONTRACT: DEAD (unemitted since 2026-07-14)",
+      "consumer": "CONTRACT: DEAD (never built)",
+      "doc": "RETIRED 2026-07-14 with runeGatedGraces (its only reason to exist). The client counts received runes for the GOAL via great_rune_items instead."
+    },
+    {
+      "name": "startRegion",
+      "shape": "STR",
+      "required": true,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/start_grace.py",
+      "consumer": "core.rs:410 as_str",
+      "doc": "name of the always-kept start region (diagnostic + start anchor)."
+    },
+    {
+      "name": "startGraces",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/start_grace.py",
+      "consumer": "startgrants.rs:58 arr_u32",
+      "doc": "grace flags lit at spawn so the first warp is possible (front-door of start region)."
+    },
+    {
+      "name": "startItems",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/start_items.py",
+      "consumer": "startgrants.rs:57 arr_i32",
+      "doc": "FullIDs granted once at game start, REPEATED path -- a duplicate is harmless (Torch, pot vessels). Unique key items ride uniqueStartGrants instead."
+    },
+    {
+      "name": "uniqueStartGrants",
+      "shape": "PAIR_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/start_items.py",
+      "consumer": "core.rs unique-grant path (startgrants.rs parse)",
+      "doc": "[FullID, obtainedFlag] pairs for flag-idempotent UNIQUE start grants (whistle 60100, bell 60110, physick 60020). The client grants the goods ONLY if the flag is unset, then sets the flag with the grant (er_logic::unique_grants) -- the flag is the single source of truth for 'has it', so reload/reconnect/pool-pickup can never double-grant."
+    },
+    {
+      "name": "reveal_all_maps",
+      "shape": "BOOL",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/start_grace.py",
+      "consumer": "startgrants.rs as_bool",
+      "doc": "reveal the whole world map + underground view (client owns the RE'd flag set)."
+    },
+    {
+      "name": "progressionSurfaceLocations",
+      "shape": "INT_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/progression_surface.py",
+      "consumer": "core.rs tracker star/lock set",
+      "doc": "AP location ids on THIS seed's progression surface -- the ONLY locations that may hold this world's own progression (region Locks, required/gate Great Runes, folded legacy keys). Enia (EniaShop) always excluded. The client stars exactly these, so 'where the locks can be' and 'what the tracker points at' are ONE set. REPLACES bigTicketLocations, which named a set progression could never reach (MajorBoss and GreatRune are not on the surface)."
+    },
+    {
+      "name": "bingoBoard",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/bingo.py",
+      "consumer": "er_logic::bingo and core.rs",
+      "doc": "Versions 1 boss board, 2 E1, 3 E2 and 4 E3: size\u00b2 cells (optional size defaults to 5; 6\u201312 requires bingo_board_sizes_v1) with synthetic location ID, defeat flag (zero for other predicates), region and label; goal line/count/blackout, count, catalogue, hash and reserved first-line sweep IDs. Optional state carries metric and target; v3+ counters carry weighted encounter groups and collections carry item groups. Requires matching bingo_v1, bingo_e1_v1, bingo_e2_v1 or bingo_e3_v1 capability; goalLocations is empty for this explicitly selected goal kind."
+    },
+    {
+      "name": "goalLocations",
+      "shape": "INT_LIST",
+      "required": true,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/goal_locations.py",
+      "consumer": "goal.rs parse",
+      "doc": "AP location ids whose completion == victory; client sends Goal when all are done."
+    },
+    {
+      "name": "goalRequiredItems",
+      "shape": "STR_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/goal_locations.py",
+      "consumer": "goal.rs parse -> item_goals",
+      "doc": "Item names the player must HOLD before Goal may be sent -- this seed's kept Region Locks, minus the precollected start anchor. THE POINT: core.set_rules already tells Archipelago the slot completes on has_all(kept locks), but goal.rs is_met() used to check the goal BOSS FLAGS ALONE, and the client's send is what actually ends the run. Because region_access is warp (every kept region sits at sphere ~1), fill may legitimately place the terminal region's Lock in sphere 0 -- measured 2026-07-30: on 25% of rolled draws the goal region was the SECOND region opened, so the run ended there while the world still claimed every lock was required. This key makes the two terminal conditions ONE. Absent under natural_progression, which mints no Lock items at all (its regionOpenFlags keys are '<Region> Lock' NAMES with no item behind them -- deriving this client-side from those keys would deadlock np seeds)."
+    },
+    {
+      "name": "checkItemFlags",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/check_item_flags.py",
+      "consumer": "detour.rs CHECK_ITEM_FLAGS<u32,Vec<u32>>",
+      "doc": "vanilla FullID (str) -> the check flags it belongs to; suppresses the vanilla bag-add."
+    },
+    {
+      "name": "shopRowFlags",
+      "shape": "SCALAR_INT_MAP",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/shops.py",
+      "consumer": "core.rs:359 i64_to_u32_map",
+      "doc": "ShopLineupParam row id -> eventFlag_forStock written for shop checks."
+    },
+    {
+      "name": "checkLotBlankMap",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/check_lots.py",
+      "consumer": "check_lots.rs (ItemLotParam_map)",
+      "doc": "ItemLotParam_MAP lot id -> the GOODS slot indices holding a check's vanilla ware."
+    },
+    {
+      "name": "checkLotBlankEnemy",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/check_lots.py",
+      "consumer": "check_lots.rs (ItemLotParam_enemy)",
+      "doc": "Same, for ItemLotParam_ENEMY (boss / enemy one-time drops). SEPARATE on purpose: the two tables can hold the SAME row id, so a merged dict loses the table and forces the client to GUESS. It guessed map-first, so every enemy lot colliding with a map id was never blanked -- a boss that is 'just an enemy' handed out its vanilla drop and fired no check (playtest 2026-07-12: Unsightly Catacombs duo, enemy lot 30120, while all five of that map's TREASURE checks randomised correctly)."
+    },
+    {
+      "name": "checkLotBlank",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/check_lots.py",
+      "consumer": "check_lots.rs configure/run",
+      "doc": "ItemLotParam lot id (str) -> [goods slot indices] holding a CHECK's vanilla ware. The client repoints those slots at apPlaceholderGoods so the vanilla ware is never handed out at a check -- while farmed/mined/bought/crafted copies are left alone."
+    },
+    {
+      "name": "checkLotZeroMap",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/check_lots.py",
+      "consumer": "check_lots.rs (ItemLotParam_map, non-goods repoint)",
+      "doc": "ItemLotParam_MAP lot id (str) -> the NON-GOODS slot indices (weapon/armor/talisman/gem) holding a check's vanilla ware. The client REPOINTS these slots at apPlaceholderGoods, writing the slot's lotItemCategory (=1, goods) alongside the id -- which is what makes a GOODS row legal where a weapon sat, and is why the old 'category mismatch' objection no longer holds. Suppressing at the source is grant-path- and flag-timing-independent, closing the leak the id-keyed suppressor left on enemy/scarab/scripted overworld drops. ONE-TIME (flagged) lots only, so it never eats a farmable source. KEY NAME IS HISTORICAL: these slots were once ZEROED (lotItemId=0, lotItemNum=0). That removed the pickup, and the pickup IS the check, so it silently killed every gear chest, scarab drop and boss drop. Fixed client-side 1121d93, confirmed in-game 2026-07-24. The key is not renamed because that would break connect for a seed rolled on an older apworld; do NOT restore the zeroing this name implies."
+    },
+    {
+      "name": "checkLotZeroEnemy",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/check_lots.py",
+      "consumer": "check_lots.rs (ItemLotParam_enemy, zero)",
+      "doc": "Same as checkLotZeroMap for ItemLotParam_ENEMY (boss / enemy one-time drops). SEPARATE table for the same reason as checkLotBlankEnemy: a lot id can live in both tables."
+    },
+    {
+      "name": "apPlaceholderGoods",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/check_lots.py",
+      "consumer": "check_lots.rs / detour.rs unconditional suppress",
+      "doc": "A spare EquipParamGoods row (8852): exists so the game can grant it, no FMG name, referenced by no lot/shop/recipe. Suppressed unconditionally -- it is never a real item, so it can never eat anything legitimate. ONE row suffices because checks are detected by the FLAG POLL, not by the item id (no synthetic id per location)."
+    },
+    {
+      "name": "enemyDropRoll",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/enemy_drops.py",
+      "consumer": "enemy_drops.rs configure/run",
+      "doc": "ItemLotParam_enemy lot id (str) -> FLAT pairs [slot, goodsId, slot, goodsId, ...]. UNFLAGGED lots only (a lot with getItemFlagId > 0 IS a check and is never sent). Only GOODS slots are rerolled; lotItemBasePoint (drop weight) is untouched, so drop RATES stay vanilla."
+    },
+    {
+      "name": "mineMaterialRoll",
+      "shape": "SCALAR_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/mine_materials.py",
+      "consumer": "mine_materials.rs configure/run",
+      "doc": "Unflagged repeatable ItemLotParam_map lot id (str) -> replacement GOODS row id. Only the 11 placed ordinary mine-material templates are eligible. Slot quantity, pickup/respawn behavior, flags, AP location count, and capstones remain untouched."
+    },
+    {
+      "name": "shopInfiniteStock",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/shop_stock.py",
+      "consumer": "shop_stock.rs configure/run",
+      "doc": "ShopLineupParam row id (str) -> [goodsId, equipType(=3), price]. The browsable UNLIMITED goods shelves (mtrlId -1, costType 0, sellQuantity -1, ungated, stock-flagged) -- 14 rows since 2026-07-29, rerolled per seed to a consumable. The previous 455-row set was the Alter-Garments / AoW-duplication / debug rows, which are MENUS, not shelves, and rerolling them corrupted those menus. The PRICE rides along, derived from the item itself, or a cheap shelf becomes an infinite dispenser. Absent/empty = shelves stay vanilla."
+    },
+    {
+      "name": "shopRunePrices",
+      "shape": "SCALAR_INT_MAP",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/rune_pricing.py",
+      "consumer": "shop_prices.rs configure/run",
+      "doc": "ShopLineupParam row id (str) -> price override. Alt-currency altar rows always map to 1, preserving their costType while preventing random rewards from demanding an absurd number of Dragon/Bayle Hearts. Other entries are CHECK rows whose reward is a rune item (Golden/Numen's/Hero's/Lord's Rune). A shop check keeps the price of the ware it USED to sell, so a slot that cost 3500 can end up selling a Golden Rune [1] worth ~200 -- the reward is randomised but its cost is not, which makes the slot strictly bad rather than a gamble. Rolled per seed in [0, 2x the rune's own derived worth] (GOODS_PRICE, the same basicPrice/sellValue*10 chain shop_stock prices its rerolls with), so buying one is sometimes free and sometimes a bad trade. Absent/empty = every row keeps its vanilla price."
+    },
+    {
+      "name": "shopPreviewGoods",
+      "shape": "SCALAR_INT_MAP",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/shops.py",
+      "consumer": "core.rs:353 i64_map",
+      "doc": "AP location id -> preview goods id shown in the shop slot."
+    },
+    {
+      "name": "stoneswordVendorRow",
+      "shape": "INT",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/minibaker.py",
+      "consumer": "minibaker.rs configure/run",
+      "doc": "MINI-BAKER: reserved ShopLineupParam row id the client repurposes into an infinite, always-in-stock Stonesword Key vendor (equipId 8000, sellQuantity -1) so imp-statue checks are never missable. 0/absent = off (row left vanilla). Reserved row is excluded from shop checks in gen_data. See memory er-minibaker-shoplineup."
+    },
+    {
+      "name": "dungeonSweepFlags",
+      "shape": "LISTVAL_INT_MAP",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/boss_sweeps (P3b client patch)",
+      "consumer": "region.rs:104 as_object",
+      "doc": "dungeon trigger flag (str) -> the member AP location ids auto-registered on clear."
+    },
+    {
+      "name": "dungeonSweeps",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "flagpoll.rs parse_dungeon_sweeps / region.rs",
+      "doc": "location-keyed dungeon sweep spec {str(trigger AP loc): [member AP locs]}. Greenfield does not emit it (its sweeps are flag-keyed: dungeonSweepFlags)."
+    },
+    {
+      "name": "sweepLockGates",
+      "shape": "STR_MAP",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "CONTRACT: DEAD (unemitted since 2026-10-06)",
+      "consumer": "CONTRACT: DEAD (client read removed)",
+      "doc": "RETIRED 2026-10-06 with Boss Keys (mode B). Was: {str(i64 sweep trigger flag): 'Boss Key: <Boss>'} -- held a dungeon sweep until the named key arrived. Always {} in practice: boss_keys was frozen off from v0.2 until its deletion."
+    },
+    {
+      "name": "progressiveGrants",
+      "shape": "NESTED_GRANTS",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/progressive.py",
+      "consumer": "progressive.rs",
+      "doc": "item name -> ordered [{goods, flags, consumed}] granted on each successive receipt. `consumed` (REQUIRED bool): true = the player SPENDS these goods, so grant them exactly once via the ledger; false = the player KEEPS them, so self-heal them (unique_goods). A consumable shipped as kept is re-granted every time it is spent -- unbounded flask upgrades, then a CTD (playtest 2026-07-12)."
+    },
+    {
+      "name": "flaskLadder",
+      "shape": "FLASK_LADDER",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/progressive.py",
+      "consumer": "progressive.rs / flask reconcile",
+      "doc": "ordered cumulative flask target list; entry i (0-based) = {charges 2..14, potency 0..12} for the flask after receiving (i+1) Progressive Flask Upgrade copies. The client RECONCILES the CHARGE target directly (a leveled state); POTENCY here is documentation -- the client sets potency from the consumed Sacred Tears the same item grants via progressiveGrants (one tear per copy). Charges monotonic non-decreasing, reaching 14 at the last rung; potency = min(rung,12); length == the PROG_FLASK copies this seed has (substituted Golden Seed / Sacred Tear checks kept, or a fixed 12 injected when none are kept -- dlc_only). The flask is a HYBRID riding BOTH wires (charges here, potency in progressiveGrants) -- intentional and non-overlapping. The charge axis is a leveled state (no spend to heal); the potency axis went back to granted/ledgered Sacred Tears because the in-place potency item-id swap CTD'd on death against ER's flask mirrors (playtest 2026-07-19). Emitted only when progressive_flasks is on."
+    },
+    {
+      "name": "death_link",
+      "shape": "BOOL_OR_INT",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/deathlink.py (legacy duplicate of options.death_link)",
+      "consumer": "er-logic/options.rs parse_death_link (reads options.death_link)",
+      "doc": "legacy top-level copy; the client reads options.death_link -- kept for back-compat."
+    },
+    {
+      "name": "no_weapon_requirements",
+      "shape": "BOOL_OR_INT",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/weapon_reqs.py (legacy duplicate of options.no_weapon_requirements)",
+      "consumer": "core.rs:304 no_weapon_reqs::set_enabled (reads options path)",
+      "doc": "legacy top-level copy; the client reads options.no_weapon_requirements."
+    },
+    {
+      "name": "enable_dlc",
+      "shape": "BOOL_OR_INT",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "core._options_echo (options.enable_dlc; top-level unemitted)",
+      "consumer": "er-logic/options.rs parse_dlc (reads options.enable_dlc)",
+      "doc": "DLC / Land of Shadow regions active; the LIVE copy is options.enable_dlc."
+    },
+    {
+      "name": "completion_scaling",
+      "shape": "INT_OR_BOOL",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/scaling.py (legacy duplicate of options.completion_scaling)",
+      "consumer": "er-logic/scaling.rs:146 (reads options.completion_scaling)",
+      "doc": "legacy top-level copy of the scaling toggle/curve id (4 = smoothstep)."
+    },
+    {
+      "name": "completion_scaling_floor",
+      "shape": "NUMBER",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/scaling.py (NOT a duplicate: this is the player-facing PERCENT)",
+      "consumer": "(no client consumer; the client reads options.completion_scaling_floor)",
+      "doc": "the raw yaml PERCENT (0..100) the player set -- a different UNIT SPACE from the same-named options.* key, which carries the HP multiplier the client parses. Informational / spoiler-side only. Do not 'unify' the two without reading features/scaling.floor_multiplier first."
+    },
+    {
+      "name": "profile",
+      "shape": "STR",
+      "required": true,
+      "profiles": [
+        "both"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "eldenring-archipelago profile.rs select_profile",
+      "doc": "which contract this seed speaks: 'greenfield' or 'bedrock'. The client selects its location-resolution path from this instead of sniffing for `locationIdsToKeys`; a profile whose required keys are missing, or a foreign-profile key present under the other profile, is a connect-time validation error naming the key."
+    },
+    {
+      "name": "versions",
+      "shape": "STR",
+      "required": true,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "eldenring-archipelago core.rs version gate",
+      "doc": "VERSION HANDSHAKE. 'apworld/<semver> contract/<hash8> data/<inputs_hash16>'. The client compares the contract hash to the one it was COMPILED against and shouts if they differ. Required, because the failure it catches is silent: apworld and client ship as two separate artifacts (apworld off-site, .dll on Nexus), so mixed versions are not an edge case, they are the norm -- and a stale .dll against a fresh apworld looks exactly like a bug in the game. Every report carries this string."
+    },
+    {
+      "name": "world_logic",
+      "shape": "STR",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "logic profile tag, e.g. 'region_lock'."
+    },
+    {
+      "name": "region_count",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "len(kept) -- how many regions are in play this seed."
+    },
+    {
+      "name": "ending_condition",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "resolved goal tag: 'region_locks' | 'great_runes'."
+    },
+    {
+      "name": "great_runes_required",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "goal.rs parse",
+      "doc": "EFFECTIVE (clamped) Great Rune requirement for the great_runes ending."
+    },
+    {
+      "name": "great_rune_items",
+      "shape": "STR_LIST",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "core._base_slot_data",
+      "consumer": "goal.rs parse",
+      "doc": "Eligible Great Rune item NAMES; goal.rs requires great_runes_required distinct names from this set before Goal can fire. WAS a diagnostic with no client read, which is exactly how the bug survived: the client's goal was the LOCATION of each rune's boss drop -- i.e. KILL Godrick -- while AP's victory rule was state.has(rune). item_shuffle is frozen ON, so the rune is NOT at the boss: you could kill every rune boss, hold no rune, and the run would end. A kill is not a collection. The client now READS this key. Absent/empty adds no requirement."
+    },
+    {
+      "name": "bossLocations",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/boss_locks.py",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "{region: [boss AP location ids]} for kept regions."
+    },
+    {
+      "name": "bossLockItems",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/boss_locks.py",
+      "consumer": "er-logic boss_felled / region.rs",
+      "doc": "{str(boss_flag): {name:'Felled: <Boss>', region, boss_ap_id}}: kept BASE-game bosses. Client mints the 'Felled:' trophy on boss-defeat. (The Boss Keys `gate` / `display_key` fields and DLC entries were retired 2026-10-06; never emitted since v0.2.)"
+    },
+    {
+      "name": "filler_foreign_localized",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/filler_foreign.py",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "count of distinct filler names forced local this seed."
+    },
+    {
+      "name": "pool_builder",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/pool_builder.py",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "whether pool curation was enabled this seed."
+    },
+    {
+      "name": "pool_builder_juice_added",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/pool_builder.py",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "resolved juice budget added by the pool builder."
+    },
+    {
+      "name": "pool_builder_intensity_floor",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/pool_builder.py",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "resolved juice rarity floor (1..3)."
+    },
+    {
+      "name": "pool_builder_juice_candidates",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/pool_builder.py",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "size of the juice candidate set at this intensity."
+    },
+    {
+      "name": "pool_builder_juice_pct",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "greenfield"
+      ],
+      "producer": "features/pool_builder.py",
+      "consumer": "(diagnostic -- no client read)",
+      "doc": "resolved share (0..100) of the Rune tail replaced with juice."
+    },
+    {
+      "name": "locationIdsToKeys",
+      "shape": "ANY",
+      "required": true,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "key_resolver.rs",
+      "doc": "matt slot key token per location; client resolves token1 -> flag (bedrock path)."
+    },
+    {
+      "name": "itemCounts",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "core._base_slot_data (greenfield) / bedrock apworld",
+      "consumer": "core.rs receive.rs itemCounts",
+      "doc": "per-item quantity map {str(ap_item_id): qty}; client grants full_id x qty. Greenfield emits stack sizes for throwables (x10) and finished pots (x4) (features/filler_curation)."
+    },
+    {
+      "name": "naturalKeyTriggers",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "both"
+      ],
+      "producer": "features/natural_progression.py (greenfield) / bedrock apworld",
+      "consumer": "key_resolver.rs / region.rs",
+      "doc": "natural key triggers: {'<Region> Lock': {'anyOf': [clause, ...]}}, each clause either {items, flags} or {countItems, count}; the client blooms that region's open flag when one is satisfied. GREENFIELD emits it whenever natural_progression is ON -- one clause per live region gate, plus the count gates and the vacuous always-open fallback for kept regions with no clause. It was tagged bedrock-only until #1463's cross-profile check fired on a real greenfield gen and proved otherwise: the tag was inherited from the 2026-07-12 sweep, which correctly demoted these keys to optional but read this one as 'ours, not his' from the CLIENT side only and never checked who emits it. Absent/empty is inert on either path."
+    },
+    {
+      "name": "lockGrantItems",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "region.rs",
+      "doc": "items granted on a region lock receipt (bedrock)."
+    },
+    {
+      "name": "randomStartDoneFlag",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "random start client path",
+      "doc": "bedrock random-start: flag set when the start warp completed."
+    },
+    {
+      "name": "randomStartWarpFlag",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "random start client path",
+      "doc": "bedrock random-start: flag that triggers the start warp."
+    },
+    {
+      "name": "randomStartAreaId",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "random start client path",
+      "doc": "bedrock random-start: destination area id."
+    },
+    {
+      "name": "randomStartGraceId",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "random start client path",
+      "doc": "bedrock random-start: destination grace id."
+    },
+    {
+      "name": "fogWalls",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "fog wall client path",
+      "doc": "bedrock fog-wall spec."
+    },
+    {
+      "name": "fogWallDebug",
+      "shape": "ANY",
+      "required": false,
+      "profiles": [
+        "bedrock"
+      ],
+      "producer": "(bedrock apworld)",
+      "consumer": "fog wall client path",
+      "doc": "bedrock fog-wall debug toggle."
+    }
+  ]
+}

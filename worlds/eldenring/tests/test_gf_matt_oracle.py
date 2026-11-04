@@ -1,0 +1,743 @@
+"""matt-oracle gate (tools/matt_oracle.py) -- parser and both checks, on a SYNTHETIC fixture.
+
+The oracle cross-checks our generated tables against a LOCAL thefifthmatt/SoulsRandomizers
+checkout. That checkout is not here, is not in CI's normal path, and must never be vendored (see
+the licence boundary in the tool's docstring), so this suite proves the tool's LOGIC instead of its
+verdict:
+
+  A. PARSER -- a hand-written itemslots document, invented for this test, round-trips into the
+     fields the checks consume: scope type, event flag, shop ids, tags, vanilla item names lifted
+     from DebugText. Includes the shop-only case (LocationScope zeroes the id in ER, so the slot
+     carries no flag and must not be joined on one) and a multi-item lot.
+  B. ITEM IDENTITY -- agreement, disagreement, and the "not comparable" paths.
+  C. MISSING SLOTS -- the tag-exclusion vocabulary, the allowlist, and the rule that an allowlisted
+     flag stays visible even when a tag would also have hidden it.
+  F. MISSABLE JOIN -- the report-only survey of our MISSABLE_LOCATIONS flags against his slots
+     tagged `missable`: the joinable set, agreement, and both one-sided sets, on a second synthetic
+     fixture. `missable` is filter vocabulary here exactly as EXCLUDED_TAGS is; no row of his is
+     stored.
+  D. SKIP -- a missing or empty checkout exits 0 and says SKIP. This is load-bearing: the tool is
+     opt-in and a missing checkout must never read as a failure.
+  E. ALLOWLIST HYGIENE -- both allowlists are bare ints with non-empty reasons in the documented
+     vocabulary, and disjointness of the class sets. This is the licence guard in test form: if a
+     future edit ever put one of his strings in there, "bare int keys" fails.
+  G. FULL REPORT -- `--report` over the synthetic fixture runs to completion and prints every
+     section header, A through F. The report-only sections D, E and F have no other end-to-end
+     cover, and a crash in an early one silently swallows every section after it.
+
+🛑 THE FIXTURE IS OURS. Every slot below is made up -- invented flags, invented placements, item
+names from the base game's own name table. Not one row, description or area name comes from his
+repo. Do not "improve" this fixture by pasting real rows into it.
+
+PROVENANCE-OK: this file writes the `<sortPrefix>,<Type>:<flag>::` key GRAMMAR, because a parser
+test that does not exercise the real key shape tests nothing. The nine keys below are SYNTHETIC --
+flags 90001-90013 and shop ids 90100/90101 are invented numbers in a range the game does not use,
+and every DebugText line was written for this test. Grammar only, no foreign data. (The marker is
+what tools/check_integrity.py's foreign-location-list guard reads; declaring it in-file puts the
+claim in the diff, where a reviewer can check it, instead of in a filename allowlist.)
+
+Run:  python -m pytest greenfield/eldenring/tests/test_gf_matt_oracle.py
+"""
+import importlib.util
+import itertools
+import os
+import subprocess
+import sys
+import tempfile
+import unittest
+
+try:                       # package-relative under pytest; plain path when run directly
+    from ._util import find_repo_root, REPO_ONLY_REASON
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from _util import find_repo_root, REPO_ONLY_REASON
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+_FOUND = find_repo_root(HERE)
+RUNNING_FROM_REPO = _FOUND is not None
+REPO = _FOUND or os.path.dirname(os.path.dirname(HERE))
+TOOL = os.path.join(REPO, "tools", "matt_oracle.py")
+
+try:
+    import yaml  # noqa: F401
+    HAVE_YAML = True
+except ImportError:
+    HAVE_YAML = False
+
+
+# A SYNTHETIC itemslots document. Same YAML-in-a-.txt shape the real one uses -- a `Slots:` list of
+# mappings whose `Key` is '<sortPrefix>,<Type>:<UniqueID 10-digit>:<ShopIDs csv>:<ModelLots csv>'.
+FIXTURE = """\
+# Synthetic fixture written for test_gf_matt_oracle. Not derived from any third-party table.
+Slots:
+- Key: '100000,0:0000090001::'
+  DebugText:
+  - Smithing Stone [1] - lot 90000001[treasure in m99_00_00_00] Smithing Stone [1], 1x
+  Tags: chest
+- Key: '100001,0:0000090002::'
+  DebugText:
+  - Smithing Stone [8] - lot 90000002[treasure in m99_00_00_00] Smithing Stone [8], 1x
+  Tags: chest
+- Key: '100002,0:0000090003::'
+  DebugText:
+  - Golden Seed - lot 90000003[treasure in m99_00_00_00] Golden Seed, 1x
+  - Sacred Tear - lot 90000003[treasure in m99_00_00_00] Sacred Tear, 1x
+  Tags: outoftheway
+- Key: '100003,0:0000090004::'
+  Tags: boss
+- Key: '100004,0:0000090010::'
+  DebugText:
+  - Rune Arc - lot 90000010[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: norandom
+- Key: '100005,0:0000090011::'
+  DebugText:
+  - Rune Arc - lot 90000011[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: enemyweapon boss
+- Key: '100006,0:0000090012::'
+  DebugText:
+  - Rune Arc - lot 90000012[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: missable
+- Key: '100007,0:0000090013::'
+  DebugText:
+  - Rune Arc - lot 90000013[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: norandom
+- Key: '100008,3:0000000000:90100,90101:'
+  DebugText:
+  - Rune Arc - shop 90100[merchant] 1x for 100 runes - flag 90200
+  Tags: shop
+"""
+
+# Our side, standing in for data.LOCATIONS / item_ids.LOCATION_ITEM.
+OUR_BY_FLAG = {
+    90001: [("Limgrave", "Limgrave :: Smithing Stone [1] [f90001]", 7770001)],
+    90002: [("Limgrave", "Limgrave :: Smithing Stone [4] [f90002]", 7770002)],
+    90003: [("Limgrave", "Limgrave :: Golden Seed [f90003]", 7770003)],
+    90004: [("Limgrave", "Limgrave :: Something [f90004]", 7770004)],
+    90005: [("Limgrave", "Limgrave :: Ours only [f90005]", 7770005)],
+}
+OUR_ITEM = {
+    7770001: "Smithing Stone [1]",     # agrees
+    7770002: "Smithing Stone [4]",     # disagrees (he says [8])
+    7770003: "Golden Seed",            # agrees -- one member of his multi-item lot
+    # 7770004 absent -> not comparable (he has no DebugText for 90004 either)
+    7770005: "Whatever",               # flag he does not carry at all -- never compared
+}
+
+
+def _load_tool():
+    spec = importlib.util.spec_from_file_location("_matt_oracle_under_test", TOOL)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+@unittest.skipUnless(RUNNING_FROM_REPO, REPO_ONLY_REASON)
+@unittest.skipUnless(HAVE_YAML, "matt_oracle's parser needs PyYAML")
+class MattOracleLogic(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.M = _load_tool()
+        cls.dir = tempfile.TemporaryDirectory()
+        base = os.path.join(cls.dir.name, "diste", "Base")
+        os.makedirs(base)
+        cls.slots_path = os.path.join(base, "itemslots.txt")
+        with open(cls.slots_path, "w", encoding="utf-8") as fh:
+            fh.write(FIXTURE)
+        cls.rows = cls.M.parse_itemslots(cls.slots_path)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dir.cleanup()
+
+    # --- A. parser -------------------------------------------------------
+    def test_A_parses_every_slot(self):
+        self.assertEqual(len(self.rows), 9)
+
+    def test_A_key_is_split_into_scope_flag_and_shops(self):
+        by = {r["flag"]: r for r in self.rows if r["flag"]}
+        self.assertEqual(sorted(by), [90001, 90002, 90003, 90004, 90010, 90011, 90012, 90013])
+        self.assertTrue(all(r["stype"] == self.M.SCOPE_EVENT for r in by.values()))
+        # The shop-only slot: ER zeroes the id, so it has NO flag and must be recognisable by its
+        # scope type and shop ids instead. Joining it on flag 0 would be a silent mis-join.
+        shop = [r for r in self.rows if r["stype"] == self.M.SCOPE_SHOP_INFINITE]
+        self.assertEqual(len(shop), 1)
+        self.assertEqual(shop[0]["flag"], 0)
+        self.assertEqual(shop[0]["shop_ids"], [90100, 90101])
+
+    def test_A_tags_and_item_names(self):
+        by = {r["flag"]: r for r in self.rows if r["flag"]}
+        self.assertEqual(by[90001]["tags"], frozenset({"chest"}))
+        self.assertEqual(by[90001]["item_names"], ["Smithing Stone [1]"])
+        # A multi-item lot yields one name per DebugText line, in order.
+        self.assertEqual(by[90003]["item_names"], ["Golden Seed", "Sacred Tear"])
+        # A slot with no DebugText yields no names -- the "not comparable" path. Asserted as a
+        # COUNT MAP over every parsed slot rather than as `== []` on the one slot: an empty-list
+        # assertion passes just as happily when the parser stopped early and saw nothing, whereas
+        # this shape names how many item names each flag produced and so cannot be satisfied by a
+        # dead parser.
+        self.assertEqual(
+            {f: len(r["item_names"]) for f, r in by.items()},
+            {90001: 1, 90002: 1, 90003: 2, 90004: 0,
+             90010: 1, 90011: 1, 90012: 1, 90013: 1},
+        )
+        self.assertEqual(by[90004]["tags"], frozenset({"boss"}))
+
+    # --- B. item identity ------------------------------------------------
+    def test_B_item_identity_agree_disagree_and_not_comparable(self):
+        dis, agree, nocmp = self.M.check_item_identity(self.rows, OUR_BY_FLAG, OUR_ITEM)
+        self.assertEqual(agree, 2)                      # 90001 exact, 90003 via the lot's members
+        self.assertEqual([d["flag"] for d in dis], [90002])
+        self.assertEqual(dis[0]["ours"], "Smithing Stone [4]")
+        self.assertEqual(dis[0]["theirs"], ["Smithing Stone [8]"])
+        self.assertIsNone(dis[0]["known"])              # not in the shipped allowlist
+        self.assertEqual(nocmp, 1)                      # 90004: he names nothing
+        # 90005 is ours-only: absent from his table entirely, so it is not counted anywhere here.
+        # That asymmetry is report-only by design (it is dominated by gestures he does not model).
+
+    def test_B_allowlist_is_consulted(self):
+        self.M.ITEM_IDENTITY_KNOWN[90002] = "TEST: injected"
+        try:
+            dis, _, _ = self.M.check_item_identity(self.rows, OUR_BY_FLAG, OUR_ITEM)
+            self.assertEqual(dis[0]["known"], "TEST: injected")
+        finally:
+            del self.M.ITEM_IDENTITY_KNOWN[90002]
+
+    # --- C. missing slots ------------------------------------------------
+    def test_C_missing_slots_excludes_by_tag(self):
+        missing, excluded = self.M.check_missing_slots(self.rows, OUR_BY_FLAG)
+        # 90010 norandom, 90011 enemyweapon (prefix rule), 90013 norandom -> excluded.
+        # 90012 missable -> a genuine missing slot. 90001-90004 we carry. The shop slot has no flag.
+        self.assertEqual(excluded, 3)
+        self.assertEqual([m["flag"] for m in missing], [90012])
+        self.assertEqual(missing[0]["tags"], ["missable"])
+        self.assertIsNone(missing[0]["known"])
+
+    def test_C_allowlist_beats_tag_exclusion(self):
+        # An explained flag stays VISIBLE even when a tag would also have hidden it, so it is never
+        # silently double-excused and its staleness stays checkable.
+        self.M.MISSING_SLOT_KNOWN[90010] = "TEST: injected"
+        try:
+            missing, excluded = self.M.check_missing_slots(self.rows, OUR_BY_FLAG)
+            self.assertEqual(excluded, 2)
+            self.assertEqual([m["flag"] for m in missing], [90010, 90012])
+            self.assertEqual(missing[0]["known"], "TEST: injected")
+        finally:
+            del self.M.MISSING_SLOT_KNOWN[90010]
+
+    def test_C_stale_entry_is_reported_when_the_gap_closes(self):
+        self.M.MISSING_SLOT_KNOWN[90001] = "TEST: injected"     # 90001 IS in OUR_BY_FLAG
+        try:
+            stale = self.M.stale_entries(set(), OUR_BY_FLAG)
+            self.assertIn(("MISSING_SLOT_KNOWN", 90001, "TEST: injected"), stale)
+        finally:
+            del self.M.MISSING_SLOT_KNOWN[90001]
+
+    # --- C2. region queue ------------------------------------------------
+    # The queue exists so two humans can work the ~218 rows a second source's own partition
+    # disagrees with. Its licence boundary is IN THE ALGORITHM: his area label is an equivalence
+    # key, the mapping it produces is built from OUR regions, and the label is discarded before
+    # anything is written. These tests assert that, not just the arithmetic.
+    def test_C2_area_maps_to_our_region_by_strict_plurality(self):
+        rows = [
+            {"stype": 0, "flag": 1, "area": "alpha"},
+            {"stype": 0, "flag": 2, "area": "alpha"},
+            {"stype": 0, "flag": 3, "area": "alpha"},
+            {"stype": 0, "flag": 4, "area": "split"},
+            {"stype": 0, "flag": 5, "area": "split"},
+            {"stype": 3, "flag": 0, "area": "shoponly"},       # no flag: contributes nothing
+        ]
+        by_flag = {
+            1: [("Limgrave", "n", 11)], 2: [("Limgrave", "n", 12)], 3: [("Caelid", "n", 13)],
+            4: [("Limgrave", "n", 14)], 5: [("Caelid", "n", 15)],
+        }
+        mapped, areas = self.M.region_area_map(rows, by_flag)
+        self.assertEqual(areas, 2)                     # 'shoponly' never became a cluster
+        self.assertEqual(mapped, {"alpha": "Limgrave"})
+        # A cluster split evenly says nothing about any row in it, so it maps to NOTHING rather
+        # than to whichever region sorted first. Silence, not a coin flip.
+        self.assertNotIn("split", mapped)
+
+    def test_C2_queue_is_the_rows_outside_their_own_cluster(self):
+        rows = [{"stype": 0, "flag": f, "area": "alpha"} for f in (1, 2, 3)]
+        rows.append({"stype": 0, "flag": 4, "area": "split"})
+        rows.append({"stype": 0, "flag": 5, "area": "split"})
+        by_flag = {
+            1: [("Limgrave", "n", 11)], 2: [("Limgrave", "n", 12)], 3: [("Caelid", "n", 13)],
+            4: [("Limgrave", "n", 14)], 5: [("Caelid", "n", 15)],
+        }
+        queue, joined, areas, mapped = self.M.check_region_queue(rows, by_flag)
+        self.assertEqual((joined, areas, mapped), (3, 2, 1))   # only 'alpha' contributes rows
+        self.assertEqual([(q["flag"], q["ap_id"], q["our_region"]) for q in queue],
+                         [(3, 13, "Caelid")])
+        self.assertEqual(queue[0]["basis"], self.M.BASIS_REGION)
+        # 🛑 THE LICENCE GUARD. Nothing of his may leave this function: no area label, no field
+        # beyond the four we write. Asserted as an EXACT key set so a future edit that carries
+        # "area" along for debugging fails here rather than shipping it into the committed tsv.
+        self.assertEqual(set(queue[0]), {"flag", "ap_id", "our_region", "basis"})
+        for value in queue[0].values():
+            self.assertNotIn("alpha", str(value))
+
+    def test_C2_dlc_membership_rows_are_queued_unconditionally(self):
+        # 520800 / 530950 are the two base-vs-DLC membership rows from the roadmap. They are queued
+        # even when the partition happens to AGREE, which is the point: a model difference that
+        # cancels out is not evidence that the row is right.
+        flags = sorted(self.M.DLC_MEMBERSHIP_FLAGS)
+        rows = [{"stype": 0, "flag": f, "area": "alpha"} for f in flags]
+        by_flag = {f: [("Roundtable Hold", "n", 900 + i)] for i, f in enumerate(flags)}
+        queue, _, _, _ = self.M.check_region_queue(rows, by_flag)
+        self.assertEqual([q["flag"] for q in queue], flags)
+        self.assertTrue(all(q["basis"] == self.M.BASIS_DLC for q in queue))
+
+    def test_C2_refresh_preserves_verdicts_and_drops_resolved_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "queue.tsv")
+            first = [{"flag": 1, "ap_id": 11, "our_region": "Limgrave",
+                      "basis": self.M.BASIS_REGION},
+                     {"flag": 2, "ap_id": 12, "our_region": "Caelid",
+                      "basis": self.M.BASIS_REGION}]
+            self.M.write_region_queue(path, first, {})
+            back = self.M.read_region_queue(path)
+            self.assertEqual(sorted(back), [(1, 11), (2, 12)])
+            self.assertEqual(back[(1, 11)]["status"], "open")
+
+            back[(1, 11)].update(status="confirmed-ours", reviewer="alaric", note="ours is right")
+            # flag 2 stopped disagreeing; flag 3 is new.
+            second = [first[0], {"flag": 3, "ap_id": 13, "our_region": "Altus",
+                                 "basis": self.M.BASIS_DLC}]
+            kept, added, dropped = self.M.write_region_queue(path, second, back)
+            self.assertEqual((kept, added, dropped), (1, 1, [(2, 12)]))
+            final = self.M.read_region_queue(path)
+            self.assertEqual(final[(1, 11)]["status"], "confirmed-ours")
+            self.assertEqual(final[(1, 11)]["reviewer"], "alaric")
+            self.assertEqual(final[(1, 11)]["note"], "ours is right")
+            self.assertEqual(final[(3, 13)]["status"], "open")
+            self.assertNotIn((2, 12), final)
+            # newline='\n' on both platforms -- the committed file is diff-gated in CI.
+            with open(path, "rb") as fh:
+                self.assertNotIn(b"\r\n", fh.read())
+
+    def test_C2_committed_queue_carries_nothing_but_our_own_columns(self):
+        # The shipped file is the licence surface. Every cell must be an int of ours, one of OUR
+        # region names, one of two basis tokens, a status from the documented vocabulary, or free
+        # text a reviewer wrote. A stray column is how a foreign area name would arrive.
+        path = os.path.join(REPO, "greenfield", "evidence", "oracle-region-queue.tsv")
+        rows = self.M.read_region_queue(path)
+        self.assertGreater(len(rows), 100)
+        by_flag, _ = self.M.load_ours(REPO)
+        regions = {r for entries in by_flag.values() for r, _n, _a in entries}
+        for (flag, ap_id), row in rows.items():
+            self.assertEqual(sorted(row), sorted(self.M.QUEUE_COLUMNS))
+            self.assertIn(row["basis"], (self.M.BASIS_REGION, self.M.BASIS_DLC))
+            self.assertIn(row["status"], self.M.QUEUE_STATUSES)
+            self.assertIn(row["our_region"], regions)
+            # the (flag, ap_id) pair must be a REAL row of ours, not just two plausible integers
+            self.assertIn(ap_id, {a for _r, _n, a in by_flag.get(flag, ())})
+        for flag in self.M.DLC_MEMBERSHIP_FLAGS:
+            self.assertTrue(any(f == flag for f, _ in rows), "flag %d left the queue" % flag)
+
+    # --- C3. the MISSABLE queue's membership rule ------------------------
+    def _missable_rows(self):
+        """Four flags his `missable` tag covers, plus two his tag does not reach."""
+        return [{"stype": 0, "flag": f, "tags": frozenset({"missable"})} for f in (1, 2, 3, 4)] + [
+            {"stype": 0, "flag": 5, "tags": frozenset({"chest"})},        # he does NOT tag it
+            {"stype": 3, "flag": 6, "tags": frozenset({"missable"})},     # not Event scope
+        ]
+
+    _MB_BY_FLAG = {
+        1: [("Limgrave", "one", 11)],     # queued: he tags it, we do not, we see a losable gate
+        2: [("Limgrave", "two", 12)],     # we ALREADY call it missable -> the models agree
+        3: [("Limgrave", "three", 13)],   # no qualifying condition class on our side
+        5: [("Limgrave", "five", 15)],
+    }                                     # flag 4 has no row of ours at all (class B, not this)
+
+    def test_C3_queue_is_the_three_way_intersection(self):
+        queue, theirs, ours, joinable = self.M.check_missable_queue(
+            self._missable_rows(), self._MB_BY_FLAG,
+            missable_aps={12},
+            conditions={1: ("DIALOGUE_STEP", "NPC_STATE"), 2: ("NPC_STATE",),
+                        5: ("DIALOGUE_STEP",)})
+        self.assertEqual((theirs, ours, joinable), (4, 1, 3))
+        self.assertEqual([(q["flag"], q["ap_id"]) for q in queue], [(1, 11)])
+        self.assertEqual(queue[0]["our_conditions"], "DIALOGUE_STEP+NPC_STATE")
+        self.assertEqual(queue[0]["basis"], self.M.BASIS_MISSABLE)
+        # 🛑 THE LICENCE GUARD, same shape as the region queue's. Nothing of his may leave this
+        # function: no tag, no field beyond the five we write. An EXACT key set, so a future edit
+        # that carries his tags along for debugging fails here rather than shipping them.
+        self.assertEqual(set(queue[0]), {"flag", "ap_id", "our_name", "our_conditions", "basis"})
+
+    def test_C3_a_bare_tag_disagreement_is_not_enough(self):
+        # WITNESS: flag 3 is a tag disagreement with NO qualifying condition class of ours. There
+        # are dozens of those, and queueing them would bury the rows where our OWN extraction
+        # independently agrees there is something losable -- which is the entire signal here.
+        rows, by_flag = self._missable_rows(), self._MB_BY_FLAG
+        # WITNESS FIRST: the inputs really do carry tagged rows that join to ours, and the SAME
+        # rows with a qualifying condition DO produce a queue. Without this, the empty assertion
+        # below would pass just as happily if the join were dead or the fixture empty.
+        self.assertTrue([r for r in rows if r["stype"] == 0 and r["flag"] in by_flag])
+        queue, _t, _o, _j = self.M.check_missable_queue(
+            rows, by_flag, missable_aps=set(), conditions={1: ("NPC_STATE",)})
+        self.assertEqual([q["flag"] for q in queue], [1])
+        # ...and now the same call with the condition table empty: no roots, no rows.
+        queue, _t, _o, _j = self.M.check_missable_queue(
+            rows, by_flag, missable_aps=set(), conditions={})
+        self.assertEqual(queue, [])
+
+    def test_C3_ungated_rows_are_queued_only_on_request_and_under_their_own_basis(self):
+        """`include_ungated=True` (what main() passes) adds the his-only flags with NO losable
+        root of ours, under BASIS_MISSABLE_UNGATED and an EMPTY our_conditions -- never under the
+        gated basis, and never silently by default."""
+        rows, by_flag = self._missable_rows(), self._MB_BY_FLAG
+        conditions = {1: ("DIALOGUE_STEP",), 2: ("NPC_STATE",)}
+        queue, _t, _o, _j = self.M.check_missable_queue(
+            rows, by_flag, missable_aps={12}, conditions=conditions, include_ungated=True)
+        by_key = {(q["flag"], q["ap_id"]): q for q in queue}
+        # 1 is gated (as before); 3 is the bare tag disagreement, now present but distinguished;
+        # 2 is still excluded because we already call it missable; 4 still has no row of ours.
+        self.assertEqual(sorted(by_key), [(1, 11), (3, 13)])
+        self.assertEqual(by_key[(1, 11)]["basis"], self.M.BASIS_MISSABLE)
+        self.assertEqual(by_key[(1, 11)]["our_conditions"], "DIALOGUE_STEP")
+        self.assertEqual(by_key[(3, 13)]["basis"], self.M.BASIS_MISSABLE_UNGATED)
+        self.assertEqual(by_key[(3, 13)]["our_conditions"], "")
+        self.assertEqual(set(by_key[(3, 13)]), {"flag", "ap_id", "our_name", "our_conditions",
+                                                 "basis"})
+        # The default is unchanged: the same inputs without the flag give the intersection only.
+        queue, _t, _o, _j = self.M.check_missable_queue(
+            rows, by_flag, missable_aps={12}, conditions=conditions)
+        self.assertEqual([q["flag"] for q in queue], [1])
+
+    # --- C4. uncovered rows: OUR rows he has no counterpart for ---------
+    def test_C4_uncovered_rows_are_ours_only_and_classified_from_our_names(self):
+        rows = self.rows
+        by_flag = dict(OUR_BY_FLAG)
+        by_flag[90200] = [("Limgrave", "Limgrave :: Rune Arc - from Merchant [f90200]", 7770200)]
+        by_flag[60801] = [("Caelid", "Caelid :: Polite Bow [f60801]", 7770801)]
+        by_flag[90300] = [("Caelid", "Caelid :: Thing, may be sweep-granted by Boss (m99) [f90300]",
+                           7770300)]
+        by_flag[400999] = [("Altus", "Altus :: Common-event thing [f400999]", 7770999)]
+        unc, joined = self.M.check_uncovered(rows, by_flag)
+        # 90001-90004 join his Event slots (one row each); 90005 and the four added do not.
+        self.assertEqual(joined, 4)
+        by_ap = {e["ap_id"]: e for e in unc}
+        self.assertEqual(sorted(by_ap), [7770005, 7770200, 7770300, 7770801, 7770999])
+        # 90200 is the flag his shop DebugText line names -> a counterpart keyed differently.
+        self.assertEqual(by_ap[7770200]["cls"], "shop-flag-join")
+        self.assertEqual(by_ap[7770801]["cls"], "gesture")
+        self.assertEqual(by_ap[7770300]["cls"], "sweep-granted")
+        self.assertEqual(by_ap[7770999]["cls"], "common-event-400k")
+        self.assertEqual(by_ap[7770005]["cls"], "other")
+        for e in unc:
+            self.assertIn(e["cls"], self.M.UNCOVERED_CLASSES)
+            # OURS ONLY: flag, ap_id, region, name, class. Nothing of his rides along.
+            self.assertEqual(set(e), {"flag", "ap_id", "region", "name", "cls"})
+
+    def test_C4_shop_debug_flags_are_parsed_from_shop_lines_only(self):
+        by_flag = {r["flag"]: r for r in self.rows}
+        shop = [r for r in self.rows if r["stype"] == 3][0]
+        self.assertEqual(shop["debug_flags"], frozenset({90200}))
+        # A lot line carries no `- flag N` suffix, so an Event slot parses to the empty set.
+        self.assertEqual(by_flag[90001]["debug_flags"], frozenset())
+
+    def test_C3_a_non_losable_condition_class_does_not_qualify(self):
+        # BOSS_KILL / REGION_ACCESS gates stay satisfiable, so they say nothing about missability.
+        # Only the three classes describing a permanently losable gate admit a row.
+        queue, _t, _o, _j = self.M.check_missable_queue(
+            self._missable_rows(), self._MB_BY_FLAG, missable_aps=set(),
+            conditions={1: ("BOSS_KILL",)})
+        self.assertEqual(queue, [])
+        for cls in self.M.MISSABLE_CONDITION_CLASSES:
+            queue, _t, _o, _j = self.M.check_missable_queue(
+                self._missable_rows(), self._MB_BY_FLAG, missable_aps=set(),
+                conditions={1: (cls,)})
+            self.assertEqual([q["flag"] for q in queue], [1], cls)
+
+    def test_C3_condition_classes_come_from_our_own_committed_table(self):
+        classes = self.M.questline_condition_classes(REPO)
+        self.assertTrue(classes)
+        for flag, cls in classes.items():
+            self.assertIsInstance(flag, int)
+            self.assertEqual(cls, tuple(sorted(cls)))     # deterministic: it lands in the tsv
+            for c in cls:
+                self.assertIn(c, self.M.MISSABLE_CONDITION_CLASSES)
+
+    def test_C3_refresh_preserves_verdicts_and_drops_resolved_rows(self):
+        # The SHARED writer, exercised through the missable queue's own column list -- which is
+        # the whole point of there being one mechanism rather than two.
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "queue.tsv")
+            first = [{"flag": 1, "ap_id": 11, "our_name": "one", "our_conditions": "NPC_STATE",
+                      "basis": self.M.BASIS_MISSABLE},
+                     {"flag": 2, "ap_id": 12, "our_name": "two", "our_conditions": "NPC_STATE",
+                      "basis": self.M.BASIS_MISSABLE}]
+            self.M.write_missable_queue(path, first, {})
+            back = self.M.read_queue(path)
+            self.assertEqual(back[(1, 11)]["status"], "open")
+            back[(1, 11)].update(status="confirmed-not-missable", reviewer="alaric",
+                                 note="always collectable")
+            second = [first[0], {"flag": 3, "ap_id": 13, "our_name": "three",
+                                 "our_conditions": "DIALOGUE_STEP",
+                                 "basis": self.M.BASIS_MISSABLE}]
+            kept, added, dropped = self.M.write_missable_queue(path, second, back)
+            self.assertEqual((kept, added, dropped), (1, 1, [(2, 12)]))
+            final = self.M.read_queue(path)
+            self.assertEqual(final[(1, 11)]["status"], "confirmed-not-missable")
+            self.assertEqual(final[(1, 11)]["reviewer"], "alaric")
+            self.assertEqual(final[(3, 13)]["status"], "open")
+            self.assertNotIn((2, 12), final)
+            with open(path, "rb") as fh:
+                self.assertNotIn(b"\r\n", fh.read())
+
+    def test_C3_committed_queue_carries_nothing_but_our_own_columns(self):
+        # The shipped file is the licence surface. Every cell must be an int of ours, one of OUR
+        # location names, OUR condition classes, the one basis token, a status from the documented
+        # vocabulary, or free text a reviewer wrote.
+        path = os.path.join(REPO, "greenfield", "evidence", "oracle-missable-queue.tsv")
+        rows = self.M.read_queue(path)
+        self.assertGreater(len(rows), 20)
+        by_flag, _ = self.M.load_ours(REPO)
+        for (flag, ap_id), row in rows.items():
+            self.assertEqual(sorted(row), sorted(self.M.MISSABLE_QUEUE_COLUMNS))
+            self.assertIn(row["basis"], self.M.MISSABLE_BASES)
+            self.assertIn(row["status"], self.M.MISSABLE_QUEUE_STATUSES)
+            # The basis and the conditions cell must agree: a gated row names at least one of
+            # our own root classes, an ungated row names none. A mismatch would mean one basis
+            # is standing in for the other, which is the confusion the two tokens exist to stop.
+            if row["basis"] == self.M.BASIS_MISSABLE:
+                self.assertTrue(row["our_conditions"])
+                for cls in row["our_conditions"].split("+"):
+                    self.assertIn(cls, self.M.MISSABLE_CONDITION_CLASSES)
+            else:
+                self.assertEqual(row["our_conditions"], "")
+            # the (flag, ap_id) pair and the name must be a REAL row of ours
+            self.assertIn((ap_id, row["our_name"]),
+                          {(a, n) for _r, n, a in by_flag.get(flag, ())})
+        # ...and every queued check must currently be ABSENT from MISSABLE_LOCATIONS: the moment
+        # one is tagged, the disagreement is over and the row must leave on the next refresh.
+        self.assertFalse({ap for _f, ap in rows} & self.M.load_missable_aps(REPO))
+
+    # --- D. skip ---------------------------------------------------------
+    def test_D_missing_checkout_skips_with_exit_zero(self):
+        for arg in (os.path.join(self.dir.name, "nope"), self.dir.name + "-absent"):
+            out = subprocess.run([sys.executable, TOOL, "--souls-rando-dir", arg],
+                                 capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            self.assertIn("SKIP:", out.stdout)
+
+    def test_D_directory_without_itemslots_skips(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "diste", "Base"))       # present but empty
+            out = subprocess.run([sys.executable, TOOL, "--souls-rando-dir", d],
+                                 capture_output=True, text=True)
+            self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+            self.assertIn("SKIP:", out.stdout)
+
+    def test_D_no_argument_and_no_env_skips(self):
+        env = dict(os.environ)
+        env.pop("SOULS_RANDO_DIR", None)
+        out = subprocess.run([sys.executable, TOOL], capture_output=True, text=True, env=env)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        self.assertIn("SKIP:", out.stdout)
+
+    # --- E. allowlist hygiene (the licence guard) ------------------------
+    def test_E_allowlists_are_bare_ints_with_classified_reasons(self):
+        vocab = ("BUNDLE", "KEYING", "SCOPE", "OPEN")
+        for name in ("ITEM_IDENTITY_KNOWN", "MISSING_SLOT_KNOWN"):
+            table = getattr(self.M, name)
+            self.assertTrue(table, name + " is empty")
+            for flag, reason in table.items():
+                self.assertIsInstance(flag, int, "%s key %r is not a bare event flag" % (name, flag))
+                self.assertGreater(flag, 0, "%s[%r] is not a real flag" % (name, flag))
+                self.assertIsInstance(reason, str)
+                self.assertTrue(reason.startswith(vocab),
+                                "%s[%d] reason %r is outside the documented vocabulary %s"
+                                % (name, flag, reason, vocab))
+
+    def test_E_class_sets_are_disjoint_and_land_in_their_table(self):
+        # WITNESS FIRST: "these two sets do not overlap" is trivially true of two empty sets, so
+        # assert they are populated before asserting they are disjoint.
+        # Class A no longer HAS a bulk set. `_A_OPEN_DLC_MATERIAL`'s 99 DLC upgrade-material flags
+        # were region_map.csv's stale `item_name` capture, closed by gen_data's lot-reconcile pass,
+        # and the set was DELETED rather than shrunk -- so nothing here may assert its existence.
+        # Class A's own invariants are covered by the reason-vocabulary test above, which walks
+        # ITEM_IDENTITY_KNOWN itself and so would also cover any future bulk set merged into it.
+        self.assertGreater(len(self.M.ITEM_IDENTITY_KNOWN), 0)
+        # The class-B sets. `_B_OPEN` was retired by the roadmap-item-3 triage; these replaced it,
+        # and each must stay POPULATED for the disjointness below to mean anything.
+        b_sets = {
+            "_B_SCOPE_MAP_FRAGMENT": self.M._B_SCOPE_MAP_FRAGMENT,
+            "_B_SCOPE_FORAGER_BROOD": self.M._B_SCOPE_FORAGER_BROOD,
+            "_B_SCOPE_UNPLACED_GLOBAL": self.M._B_SCOPE_UNPLACED_GLOBAL,
+            "_B_SCOPE_SCATTERED_FILLER": self.M._B_SCOPE_SCATTERED_FILLER,
+            "_B_SCOPE_NOT_FINDABLE": self.M._B_SCOPE_NOT_FINDABLE,
+        }
+        self.assertFalse(hasattr(self.M, "_B_OPEN"),
+                         "_B_OPEN is retired -- a flag belongs in a CLASSIFIED set, not a bin")
+        for name, s in b_sets.items():
+            self.assertTrue(s, name + " is empty")
+        for a, b in itertools.combinations(sorted(b_sets), 2):
+            self.assertFalse(b_sets[a] & b_sets[b],
+                             "%s and %s overlap -- a flag gets exactly ONE reason" % (a, b))
+        for s in b_sets.values():
+            for f in s:
+                self.assertIn(f, self.M.MISSING_SLOT_KNOWN)
+
+    def test_E_tombstoned_flag_tile_only_slot_is_known_scope(self):
+        # #1522 removed this phantom check after proving that its only apparent placement was the
+        # map tile decoded from the flag itself. Matt's pinned slot table still carries the flag,
+        # so the weekly oracle must classify that deliberate absence instead of reopening it.
+        self.assertIn(1042377110, self.M._B_SCOPE_NOT_FINDABLE)
+        self.assertTrue(self.M.MISSING_SLOT_KNOWN[1042377110].startswith("SCOPE:"))
+
+    def test_E_excluded_tag_vocabulary_is_lowercase_words(self):
+        for t in self.M.EXCLUDED_TAGS:
+            self.assertRegex(t, r"^[a-z+]+$")
+        self.assertTrue(self.M._excluded_by_tags(frozenset({"norandom"})))
+        self.assertTrue(self.M._excluded_by_tags(frozenset({"enemygem"})))
+        self.assertFalse(self.M._excluded_by_tags(frozenset({"missable", "chest"})))
+
+    # --- G. the full report runs end to end ------------------------------
+    def test_G_full_report_prints_every_section(self):
+        """`--report` over the synthetic fixture must reach the LAST section.
+
+        Section D's divergence arithmetic used to meet a None boss-class count -- which is what a
+        made-up fixture always produces, since no slot of his carries any boss tag -- and raise
+        TypeError, taking E and F down with it. Asserting the headers as a SET, in order, rather
+        than just "no traceback": a section that stops printing is the failure this guards.
+        """
+        out = subprocess.run(
+            [sys.executable, TOOL, "--souls-rando-dir", self.dir.name, "--report"],
+            capture_output=True, text=True,
+            env=dict(os.environ, PYTHONIOENCODING="utf-8"),
+        )
+        self.assertNotIn("Traceback", out.stderr, out.stderr)
+        self.assertEqual(out.stderr.strip(), "", out.stderr)
+        # Exit 1 is CORRECT here: the fixture's flag 90012 is an unexplained missing slot. What is
+        # under test is that the report is complete, not that it passes.
+        self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+        headers = ["== A. ", "== B. ", "== C. ", "== D. ", "== E. ", "== F. ", "== G. ",
+                   "== H. ", "== I. "]
+        at = -1
+        for h in headers:
+            i = out.stdout.find(h)
+            self.assertGreater(i, at, "section %r missing or out of order:\n%s" % (h, out.stdout))
+            at = i
+        # And the None counts render as a dash with a reason, not as "None".
+        self.assertIn("n/a -- no slot of his carries the tag", out.stdout)
+        self.assertNotIn("None", out.stdout)
+
+
+# A SECOND synthetic fixture, for the report-only missable join. Flags 90021-90025 and shop id 90102
+# are invented numbers in a range the game does not use; every DebugText line was written for this
+# test. PROVENANCE-OK, same declaration as the fixture above: grammar only, no foreign data.
+FIXTURE_MISSABLE = """# Synthetic fixture written for test_gf_matt_oracle. Not derived from any third-party table.
+Slots:
+- Key: '200000,0:0000090021::'
+  DebugText:
+  - Rune Arc - lot 90000021[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: missable npc
+- Key: '200001,0:0000090022::'
+  DebugText:
+  - Rune Arc - lot 90000022[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: missable
+- Key: '200002,0:0000090023::'
+  DebugText:
+  - Rune Arc - lot 90000023[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: missable
+- Key: '200003,0:0000090024::'
+  DebugText:
+  - Rune Arc - lot 90000024[treasure in m99_00_00_00] Rune Arc, 1x
+  Tags: chest
+- Key: '200004,3:0000000000:90102:'
+  DebugText:
+  - Rune Arc - shop 90102[merchant] 1x for 100 runes - flag 90201
+  Tags: missable shop
+"""
+
+# Our side. 90021/90022/90024 have rows; 90023 does NOT (so his missable tag is not joinable).
+MISS_BY_FLAG = {
+    90021: [("Limgrave", "Limgrave :: Agreed missable [f90021]", 7770021)],
+    90022: [("Limgrave", "Limgrave :: His only [f90022]", 7770022)],
+    90024: [("Limgrave", "Limgrave :: Ours only [f90024]", 7770024)],
+}
+MISS_OURS = {90021, 90024}          # what MISSABLE_LOCATIONS would resolve to, flag-side
+
+
+@unittest.skipUnless(RUNNING_FROM_REPO, REPO_ONLY_REASON)
+@unittest.skipUnless(HAVE_YAML, "matt_oracle's parser needs PyYAML")
+class MattOracleMissableJoin(unittest.TestCase):
+    """F. The report-only missable survey.
+
+    It is REPORT-ONLY on purpose and this suite must not grow an expectation about the real counts:
+    he tags a SLOT ("do not randomize this into oblivion") and we tag a CHECK ("must not host
+    REQUIRED progression"), so the two sides answer different questions and a one-sided flag is a
+    worklist entry rather than a defect. What is testable is the JOIN's arithmetic, below.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.M = _load_tool()
+        cls.dir = tempfile.TemporaryDirectory()
+        base = os.path.join(cls.dir.name, "diste", "Base")
+        os.makedirs(base)
+        path = os.path.join(base, "itemslots.txt")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(FIXTURE_MISSABLE)
+        cls.rows = cls.M.parse_itemslots(path)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.dir.cleanup()
+
+    def test_F_join_splits_agree_and_both_one_sided_sets(self):
+        joinable, agree, his_only, ours_only = self.M.check_missable(
+            self.rows, MISS_BY_FLAG, MISS_OURS)
+        # 90023 carries his tag but we have no row for it, so it is NOT joinable -- counting it
+        # would inflate "his-only" with slots the join cannot speak about at all.
+        self.assertEqual(joinable, [90021, 90022])
+        self.assertEqual(agree, [90021])
+        self.assertEqual(his_only, [90022])
+        self.assertEqual(ours_only, [90024])
+        # The arithmetic the report prints must close over the joinable set.
+        self.assertEqual(len(joinable), len(agree) + len(his_only))
+
+    def test_F_shop_only_slot_is_never_joined(self):
+        """ER's LocationScope zeroes the id on a shop-only slot. A missable tag on one must not
+        join onto flag 0, which is not a flag."""
+        by_flag = dict(MISS_BY_FLAG)
+        by_flag[0] = [("Nowhere", "flag zero is not a flag", 7770000)]
+        joinable, _agree, _his, _ours = self.M.check_missable(self.rows, by_flag, MISS_OURS)
+        self.assertNotIn(0, joinable)
+
+    def test_F_missable_tag_is_the_only_filter(self):
+        """An untagged slot we DO carry (90024) is never in his set, whatever else it is tagged."""
+        _joinable, _agree, his_only, ours_only = self.M.check_missable(
+            self.rows, MISS_BY_FLAG, MISS_OURS)
+        self.assertNotIn(90024, his_only)
+        self.assertIn(90024, ours_only)
+
+    def test_F_our_missable_flags_resolve_through_data_locations(self):
+        """load_missable_flags maps ap_ids back to flags; every flag it returns must be a real
+        LOCATIONS flag, and the row count must be the table's own length (nothing dropped silently
+        beyond ap_ids LOCATIONS has no row for -- there should be none)."""
+        flags, n_rows = self.M.load_missable_flags(REPO)
+        miss = self.M._load_table(REPO, "missable_locations").MISSABLE_LOCATIONS
+        data = self.M._load_table(REPO, "data")
+        all_flags = {f for entries in data.LOCATIONS.values() for (_n, _a, f) in entries}
+        self.assertEqual(n_rows, len(miss))
+        self.assertTrue(flags, "no missable flag resolved -- the ap_id -> flag join is broken")
+        self.assertTrue(flags <= all_flags)
+
+    def test_F_section_letter_is_registered_in_the_tool(self):
+        """The section header the report prints, plus the call that fills it, asserted against the
+        tool's SOURCE. The end-to-end complement is test_G_full_report_prints_every_section, which
+        checks that F is actually REACHED; this one checks it is wired to check_missable and that
+        nothing it computes leaks into the gated tail."""
+        src = open(TOOL, encoding="utf-8").read()
+        self.assertIn('"== F. MISSABLE (report-only, no gate) =="', src)
+        self.assertIn("check_missable(rows, by_flag, ours_flags)", src)
+        # Report-only: nothing the survey computes may reach main()'s return value.
+        tail = src[src.index("stale = stale_entries"):]
+        self.assertNotIn("his_only", tail,
+                         "the missable survey leaked into the gated tail of main()")
+
+if __name__ == "__main__":
+    unittest.main()

@@ -1,0 +1,262 @@
+# -*- coding: utf-8 -*-
+"""Pure tests for greenfield/desc_sources.py -- the location-description waterfall.
+
+No elden_ring_artifacts, no Archipelago: desc_sources is data-injected, so every layer is
+exercised with fixtures. Run directly:  python3 eldenring/tests/test_gf_location_desc.py
+(Also import-safe under pytest: bare asserts, functions prefixed test_.)
+"""
+import importlib.util
+import os
+
+import pytest
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+
+def _find_up(rel):
+    """Search UP from the test dir for `rel`. A fixed dirname^N breaks when the world is INSTALLED
+    (CI runs from `_ap/worlds/eldenring/tests`, one level deeper than the source tree), so walk up
+    until found -- `_ap` lives inside the repo, so the source `greenfield/desc_sources.py` is reachable
+    past it. None when the source tree isn't present at all (a bare player install)."""
+    d = HERE
+    for _ in range(10):
+        cand = os.path.join(d, rel)
+        if os.path.exists(cand):
+            return cand
+        nd = os.path.dirname(d)
+        if nd == d:
+            break
+        d = nd
+    return None
+
+
+_DESC = _find_up(os.path.join("greenfield", "desc_sources.py"))
+if _DESC is None:
+    pytest.skip("greenfield/desc_sources.py not found (source tree absent) -- source-tree tool test",
+                allow_module_level=True)
+
+
+def _load():
+    spec = importlib.util.spec_from_file_location("desc_sources", _DESC)
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+ds = _load()
+
+
+def test_map_short():
+    assert ds.map_short("m20_01_00_00") == "m20_01"
+    assert ds.map_short("m60_41_53_00") == "m60_41_53"
+    assert ds.map_short("m61_50") == "m61_50"
+    assert ds.map_short("m20_00_00_00;m20_01_00_00") == "m20_00"   # multi-map -> first
+    assert ds.map_short("") == ""
+    assert ds.map_short(None) == ""
+    # non-tile placeholders (shop/global rows) are NOT map tokens -> no locale
+    assert ds.map_short("PENDING") == ""
+    assert ds.map_short("global") == ""
+
+
+def test_clean_treasure_name_keeps_real_places():
+    # post-colon place phrase survives
+    assert ds.clean_treasure_name("宝箱000：魔術師の塔") == "魔術師の塔"
+    assert ds.clean_treasure_name("アイテム光000：星見台") == "星見台"
+    # decoration tags + trailing day-tags stripped, phrase kept
+    assert ds.clean_treasure_name("【宝死体】0015 ガーゴイル部屋①【day1追加】") == "ガーゴイル部屋①"
+
+
+def test_clean_treasure_name_drops_noise():
+    for junk in ("宝死体062", "c0000_9000", "common90005300", "award",
+                 "trigflag9280", "アイテム光000", "貴人_宝死体000", "市民_宝死体001",
+                 "宝死体", "", "  ", "0035"):
+        assert ds.clean_treasure_name(junk) == "", junk
+
+
+def test_waterfall_precedence():
+    flag = 20007620
+    srcs = dict(
+        overrides={flag: "East of the smithing table"},
+        boss_names={flag: "Dancing Lion"},
+        spot_names={flag: "Sorcerer's Tower"},
+        nearest_grace={flag: "Belurat, Tower Settlement"},
+    )
+    # override wins over everything
+    assert ds.describe(flag, "treasure", "m20_00_00_00", is_boss=True, **srcs) == "East of the smithing table"
+    # remove override -> boss wins (only when tagged boss/remembrance)
+    del srcs["overrides"]
+    assert ds.describe(flag, "treasure", "m20_00_00_00", is_remembrance=True, **srcs) == "Dancing Lion"
+    # not a boss/remembrance -> boss layer skipped, spot wins
+    assert ds.describe(flag, "treasure", "m20_00_00_00", **srcs) == "Sorcerer's Tower"
+    # remove spot -> nearest grace, prefixed "near "
+    del srcs["spot_names"]
+    assert ds.describe(flag, "treasure", "m20_00_00_00", **srcs) == "near Belurat, Tower Settlement"
+    # remove grace -> locale fallback
+    del srcs["nearest_grace"]
+    assert ds.describe(flag, "treasure", "m20_01_00_00", **srcs) == "treasure · m20_01"
+
+
+def test_scadutree_x4_all_distinguishable():
+    # the motivating case: 4 Scadutree Fragments, indistinguishable by item name. With grace data
+    # each resolves to a different, human descriptor; with none, the map sub-tile still splits them.
+    graces = {20007620: "Belurat, Tower Settlement", 20007820: "Belurat, Stagefront",
+              20017350: "Belurat, Theatre", 20017470: "Belurat, Walkway"}
+    maps = {20007620: "m20_00_00_00", 20007820: "m20_00_00_00",
+            20017350: "m20_01_00_00", 20017470: "m20_01_00_00"}
+    descs = [ds.describe(f, "treasure", maps[f], nearest_grace=graces) for f in graces]
+    assert len(set(descs)) == 4, descs
+    # with NO grace data, layer 5 still discriminates by sub-tile (2 tiles here)
+    descs2 = [ds.describe(f, "treasure", maps[f]) for f in graces]
+    assert set(descs2) == {"treasure · m20_00", "treasure · m20_01"}
+
+
+def test_locale_always_present_when_map_known():
+    # every check with a known map gets *something* even with all sources empty
+    assert ds.describe(999, "map_lot", "m12_03_00_00") == "world drop · m12_03"
+    # unknown/ugly method drops its verb -> tile alone (no "global_filler · m61_49_49")
+    assert ds.describe(999, "weird", "m99_09") == "m99_09"
+    assert ds.describe(999, "global_filler", "m61_49_49") == "m61_49_49"
+    # truly nothing known -> None (name stays bare)
+    assert ds.describe(999, "", "") is None
+    # a shop/hub row (method present, but NO map) stays bare -- self-explanatory, no locale noise
+    assert ds.describe(999, "shop", "") is None
+    assert ds.describe(999, "shop_multi", None) is None
+    # shop/global rows carry a placeholder map ('PENDING'); must not leak "global · PENDING"
+    assert ds.describe(999, "global", "PENDING") is None
+    assert ds.describe(999, "shop_merchant", "PENDING") is None
+    # gestures are unique + self-explanatory: no locale even with a map (keeps their exact-name test)
+    assert ds.describe(60822, "gesture", "m11_00_00_00") is None
+    # ...but a higher layer still names a gesture if one is supplied
+    assert ds.describe(60822, "gesture", "m11_00_00_00", overrides={60822: "By the ramparts"}) == "By the ramparts"
+
+
+def test_tile_grace_layer_4b():
+    tg = {"m61_49_49": "Scaduview, Highroad Cross"}
+    # per-check exact grace (layer 4) wins over tile-grace (4b)
+    assert ds.describe(1, "treasure", "m61_49_49_00", nearest_grace={1: "Exact Grace"},
+                       tile_grace=tg) == "near Exact Grace"
+    # no exact grace -> tile-grace, rendered "around"
+    assert ds.describe(1, "global_filler", "m61_49_49_00", tile_grace=tg) == "around Scaduview, Highroad Cross"
+    # tile with no grace entry -> falls through to locale (tile token)
+    assert ds.describe(1, "global_filler", "m61_50_43_00", tile_grace=tg) == "m61_50_43"
+
+
+def test_cross_region_grace_guard():
+    # Alaric 2026-07-22: a Roundtable-Hold Memory Stone was labelled "near/around South Raya Lucaria
+    # Gate" -- a Liurnia grace on a HUB/shop check with a spurious map tile. The guard suppresses a
+    # grace-derived descriptor ONLY across the disconnected HUB boundary (either direction); adjacent
+    # / same-place overworld cross-region graces are KEPT (they are good locators).
+    HUB = "Roundtable Hold"
+    gr = {"South Raya Lucaria Gate": {"Liurnia"}, "Table of Lost Grace": {HUB},
+          "Castleward Tunnel": {"Limgrave"}}
+    tg = {"m60_35_45": "South Raya Lucaria Gate"}
+    ng = {60470: "South Raya Lucaria Gate"}
+
+    # HUB check + overworld grace -> SUPPRESS the grace (4b), then the spurious overworld-tile locale
+    # (5) too -> fully BARE (a Roundtable purchase is self-explanatory by its region prefix).
+    assert ds.describe(60470, "shop", "m60_35_45_00", tile_grace=tg,
+                       check_region=HUB, grace_region=gr, hub_region=HUB) is None
+    # same via the exact nearest-grace (layer 4).
+    assert ds.describe(60470, "shop", "m60_35_45_00", nearest_grace=ng,
+                       check_region=HUB, grace_region=gr, hub_region=HUB) is None
+    # a HUB check on an INTERIOR tile keeps its locale (only overworld tiles are spurious for the HUB).
+    assert ds.describe(1, "treasure", "m11_10_00_00",
+                       check_region=HUB, hub_region=HUB) == "treasure · m11_10"
+    # a real OVERWORLD check (region_of'd to its overworld region, not the HUB) keeps its locale.
+    assert ds.describe(1, "treasure", "m60_35_45_00",
+                       check_region="Liurnia", hub_region=HUB) == "treasure · m60_35_45"
+    # overworld check + the HUB's own grace (Table of Lost Grace) -> SUPPRESS (the other direction).
+    assert ds.describe(1, "treasure", "m11_10_00_00", tile_grace={"m11_10": "Table of Lost Grace"},
+                       check_region="Limgrave", grace_region=gr, hub_region=HUB) == "treasure · m11_10"
+    # ADJACENT overworld cross-region (Stormveil <- Castleward Tunnel, a Limgrave grace) -> KEPT.
+    assert ds.describe(1, "treasure", "m10_00_00_00", tile_grace={"m10_00": "Castleward Tunnel"},
+                       check_region="Stormveil", grace_region=gr, hub_region=HUB) == "around Castleward Tunnel"
+    # region-consistent grace -> KEPT.
+    assert ds.describe(60470, "treasure", "m60_35_45_00", tile_grace=tg,
+                       check_region="Liurnia", grace_region=gr, hub_region=HUB) == "around South Raya Lucaria Gate"
+    # a Roundtable grace on a Roundtable check -> KEPT (region-consistent, not a mismatch).
+    assert ds.describe(1, "treasure", "m11_10_00_00", tile_grace={"m11_10": "Table of Lost Grace"},
+                       check_region=HUB, grace_region=gr, hub_region=HUB) == "around Table of Lost Grace"
+    # guard is INERT without the region args (partial repo / existing callers) -> descriptor kept.
+    assert ds.describe(60470, "shop", "m60_35_45_00", tile_grace=tg) == "around South Raya Lucaria Gate"
+    # grace whose region we don't know -> not guessed, descriptor kept.
+    assert ds.describe(1, "treasure", "m99_99_00_00", tile_grace={"m99_99": "Mystery Grace"},
+                       check_region=HUB, grace_region=gr, hub_region=HUB) == "around Mystery Grace"
+
+
+def test_collision_ordinals():
+    # three share a base, one is alone -> the three get 1..3 in flag order, the loner gets nothing
+    rows = [("A :: Frag - around G", 2050437500),
+            ("A :: Frag - around G", 2050437010),
+            ("A :: Frag - around G", 2051447500),
+            ("A :: Sword", 530810)]
+    o = ds.collision_ordinals(rows)
+    assert o == {1: 1, 0: 2, 2: 3}, o          # flag-sorted: ...010 -> 1, ...500 -> 2, ...447500 -> 3
+    assert 3 not in o                            # the unique row gets no ordinal
+    # applying the ordinals yields four distinct names
+    names = [b + (f" ({o[i]})" if i in o else "") for i, (b, _f) in enumerate(rows)]
+    assert len(set(names)) == 4
+
+
+if __name__ == "__main__":
+    import sys
+    fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
+    for fn in fns:
+        fn()
+        print("ok", fn.__name__)
+    print(f"\n{len(fns)} tests passed")
+    sys.exit(0)
+
+
+# ---------------------------------------------------------------------------------------------
+# The sweep clause's WORDING (er-archipelago#936).
+#
+# The clause is baked into 4063 of 4948 location names and rides the STATIC AP datapackage, so it
+# cannot see a seed. Through v0.5.1 it read "also granted by X" -- a promise the corpus is not
+# entitled to make, because `dungeon_sweep` and the progression-surface cut may take the member
+# back out (colombius, Discord 2026-08-27; Haraldwyrm, 2026-08-20). v0.5.2 states ELIGIBILITY.
+# These pin the writer, and the writer/opener pair, so a reader that strips by the opener cannot
+# silently stop matching. The client recognises this opener AND the retired one (clients#460).
+
+def test_sweep_clause_states_eligibility_not_a_grant():
+    assert ds.sweep_clause("Fire Giant", "m60_52_52") == "may be sweep-granted by Fire Giant (m60_52_52)"
+    assert ds.sweep_clause("Fire Giant") == "may be sweep-granted by Fire Giant"
+    assert ds.sweep_clause("") is None
+    assert ds.sweep_clause(None) is None
+
+
+def test_the_opener_is_exactly_what_with_sweep_writes():
+    # The single seam: every reader (check browser, desc triage, the client) cuts on this string.
+    # If the writer and the constant drift, a reader stops stripping and shows a raw clause.
+    joined = ds.with_sweep("near Foot of the Forge", "Fire Giant", "m60_52_52")
+    assert joined == "near Foot of the Forge" + ds.SWEEP_CLAUSE_OPENER + "Fire Giant (m60_52_52)"
+    assert ds.SWEEP_CLAUSE_OPENER.startswith(", ")
+
+
+def test_no_shipped_wording_asserts_a_grant():
+    # The clause may say a grant is POSSIBLE; it may never assert one. "also granted by" did.
+    clause = ds.sweep_clause("Fire Giant", "m60_52_52")
+    assert "also granted by" not in ds.SWEEP_CLAUSE_OPENER and "also granted by" not in clause
+    assert ds.SWEEP_CLAUSE_OPENER.lstrip(", ").startswith("may be ")
+
+
+def test_the_clause_never_nests_parentheses_around_the_tile():
+    # 🛑 THE SHAPE IS LOAD-BEARING. #936 sketched " (Fire Giant sweep-eligible, m60_52_52)"; that
+    # form nests when the boss name itself carries parens, and every splitter here is paren-blind.
+    # colombius's own corpus has such a boss: `Night's Cavalry (Glaive)`.
+    clause = ds.sweep_clause("Night's Cavalry (Glaive)", "m60_48_55")
+    assert clause.endswith(" (m60_48_55)")
+    # the tile parenthesis is the LAST one and nothing follows it
+    assert clause.rindex("(") == clause.rindex("(m60_48_55)")
+
+
+def test_a_reader_can_take_the_clause_back_off_by_the_opener_alone():
+    # The inverse the check browser and the client both perform, spelled out: cut at the opener,
+    # keep the " [fNNNN]" tail. Colombius's Golden Seed, ap 7773181 (rule 11).
+    name = ("Mountaintops of the Giants :: Golden Seed - near Foot of the Forge, by two snow "
+            "trolls" + ds.SWEEP_CLAUSE_OPENER + "Fire Giant (m60_52_52) [f1052537800]")
+    cut = name.index(ds.SWEEP_CLAUSE_OPENER)
+    tail = name[cut:].index(" [f")
+    assert name[:cut] + name[cut + tail:] == (
+        "Mountaintops of the Giants :: Golden Seed - near Foot of the Forge, by two snow trolls "
+        "[f1052537800]")

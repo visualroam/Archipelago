@@ -1,0 +1,296 @@
+"""Contract-snapshot test for the Greenfield ER world's slot_data -- WorldTestBase.
+
+This is the CONTRACT-DRIFT GUARD for the client contract. The Rust client reads a fixed set of
+slot_data keys. The single source of truth for the CONTRACT keys and their SHAPES is
+`worlds.eldenring.contract` -- so the shape/required checks here delegate to
+`contract.validate_slot_data(sd, strict=True)` and CANNOT go stale when a shape changes.
+
+The keyset guard (test_exact_keyset) still asserts the emitted keyset EXACTLY, but it BUILDS the
+expected set FROM the contract (every greenfield contract key the world emits) plus the small,
+explicitly-listed set of INFORMATIONAL non-contract extras the world also emits (option echoes /
+diagnostics the client does not parse). If a source change adds, renames, or drops a slot_data key,
+this test fails -- forcing a conscious update here (and a look at whether the client was updated too).
+
+Design (matches the other greenfield WorldTestBase suites):
+  * importorskip AP + the installed world, so this is a no-op in the source-tree sandbox and only
+    runs once the world is installed under Archipelago/worlds/.
+  * option keys/values mirror the feature option classes in core.py + features/*.py:
+      - item_shuffle (Toggle)               -> True
+      - dungeon_sweep (Choice)              -> "all"   (emits dungeonSweepFlags; dungeonSweeps
+                                                       went bedrock-only in #1463, sweepLockGates
+                                                       was retired with Boss Keys 2026-10-06)
+      - pool_builder_intensity (Choice)     -> max     (widest juice catalog; the option was
+                                                       unfrozen 2026-07-28, `pool_builder` itself is retired)
+      - ending_condition (Choice)           -> "great_runes" + great_runes_required=2
+
+Run (from the Archipelago dir, world installed):
+    python -m pytest worlds/eldenring/tests/test_gf_slot_data_fixture.py
+"""
+import pytest
+
+WorldTestBase = pytest.importorskip("test.bases").WorldTestBase
+pytest.importorskip("worlds.eldenring")
+from worlds.eldenring.tables.data import HUB, LOCATIONS  # noqa: E402
+from worlds.eldenring import contract  # noqa: E402
+
+GAME = "Elden Ring"
+
+# ---------------------------------------------------------------------------------------------
+# THE CONTRACT keyset is derived from `contract.py` (single source of truth) so it can't go stale.
+#   * CONTRACT_KEYS_EMITTED = greenfield contract keys that the world actually emits at rich scope
+#     (the greenfield contract also declares two OPTIONAL keys the world does not currently emit --
+#     enable_dlc, lockRevealFlags -- so we intersect the contract greenfield set with what is emitted
+#     to keep the exact-keyset guard honest without hard-coding shapes).
+#   * INFORMATIONAL_EXTRAS = keys the world emits that are NOT part of the client contract (option
+#     echoes / diagnostics the Rust client ignores). These are listed explicitly so a NEW extra key
+#     still trips the guard.
+# ---------------------------------------------------------------------------------------------
+_GF_CONTRACT_KEYS = {k.name for k in contract.CONTRACT if k.in_profile("greenfield")}
+
+# Non-contract informational keys the greenfield world emits (verified against a real fill_slot_data).
+# The Rust client does not parse these; they are option echoes / diagnostics.
+INFORMATIONAL_EXTRAS = {
+    "region_count",               # int  : len(kept)
+    "completionScalingBasis",     # int  : 1
+    "completion_scaling",         # int  : client curve id
+    "completion_scaling_floor",   # int
+    # global_scadutree_blessing: RETIRED as a top-level key 2026-07-31. It was declared in the
+    # contract AND echoed here, and nothing ever read the top-level copy -- the client goes
+    # through /options/global_scadutree_blessing, which is unaffected.
+    "ending_condition",           # str  : "region_locks" | "great_runes"
+    "great_runes_required",       # int  : effective (clamped) rune requirement
+    "bossLocations",              # dict[str region] -> list[int]
+    "pool_builder",               # bool
+    "pool_builder_juice_added",   # int
+    "pool_builder_intensity_floor",     # int : resolved juice rarity floor (1..3)
+    "pool_builder_juice_candidates",    # int : size of the juice candidate set at this intensity
+    "filler_foreign_localized",         # int : distinct filler names forced local this seed
+}
+
+# The keys the RICH seed (every optional feature on) is expected to emit: the greenfield contract keys
+# it actually emits, plus the informational extras. Built at import time so it tracks contract.py.
+# (enable_dlc / lockRevealFlags / versions are contract-declared but not emitted by the current
+# world. regionSphereTargetRanges IS emitted as of I2 -- features/scaling.py, the live scaling wire.)
+# dlcScadutreeFloorRanges is NOT emitted by a default seed as of 2026-07-18: global_scadutree_blessing
+# is frozen OFF (defaults.py balance call -- the per-DLC-region blessing FLOOR made the DLC too easy).
+# This is a JUSTIFIED not-emitted key, not a silenced gate: the option's `scaled` value, the gen
+# producer (blessing_floor_ranges / DLC_BLESSING_FLOORS), and the client floor consumer (scaling.rs)
+# are ALL retained -- a seed that sets `scaled` still emits + consumes the wire (covered by the pure
+# blessing_floor_ranges test in test_gf_scaling_sphere). Only the DEFAULT stopped emitting it, by
+# design. The guard's rule holds: a key that genuinely loses its producer must be justified here in
+# prose (this) or tagged CONTRACT: DEAD -- never silently dropped.
+# runeGatedGraces / greatRuneItemIds: RETIRED 2026-07-14 (gated-children fix). Their client half
+# was NEVER built -- the keys appear in contract_gen.rs and in no consumer over the client repo's
+# full history -- so the pair was emitted-and-parsed-by-nothing, the exact half-feature this guard
+# exists to name. A gated child's grace bundle is now withheld outright (features/graces.py) and
+# both keys are tagged CONTRACT: DEAD in contract.py.
+_CONTRACT_NOT_EMITTED = {
+                         # Bingo is a replacement goal mode, off in these ordinary fixtures.
+                         # test_gf_bingo verifies its off payload and test_gf_options its on payload.
+                         "bingoBoard", "enable_dlc", "runeGatedGraces", "greatRuneItemIds",
+                         "dlcScadutreeFloorRanges",
+                         # abilityUnlockItems is emitted ONLY under ability_lock_mode: progressive
+                         # (#980) -- the id->ability map for the shuffled 'Unlock: X' items. The rich
+                         # and default fixture seeds are static-mode, so it is justified-not-emitted
+                         # here; test_gf_ability_unlock covers the progressive keyset directly.
+                         "abilityUnlockItems",
+                         # naturalKeyTriggers is emitted ONLY under `natural_progression` (#1466),
+                         # which is a whole progression MODE rather than a feature toggle: turning
+                         # it on here would delete the synthetic region locks these fixtures exist
+                         # to pin, so RICH cannot satisfy its condition the way it satisfies
+                         # grace_attunement's. Same shape as abilityUnlockItems above -- the mode's
+                         # own suite owns the key (test_gf_natural_progression.py asserts it is
+                         # emitted and well-formed), and its absence off-mode is asserted and
+                         # ledgered in test_gf_profile_declaration / test_gf_off_means_off.
+                         "naturalKeyTriggers",
+                         # NO SEED EMITS A BLESSING CEILING any more (2026-08-06). The only ceiling
+                         # is the vanilla ladder's 20, which is what an ABSENT key has always meant
+                         # on the client side -- so absence is now the answer at every mode, not a
+                         # conditional. The contract key stays declared: the client still honours it
+                         # and removing it would move CONTRACT_HASH for a cosmetic tidy.
+                         # sweepLockGates: RETIRED 2026-10-06 with Boss Keys. It was only ever `{}`
+                         # (boss_keys frozen off since v0.2); tagged CONTRACT: DEAD and kept
+                         # declared so CONTRACT_HASH does not move.
+                         "sweepLockGates",
+                         "scaduBlessingCap"}   # blessing frozen OFF 2026-07-18 -- see above; `versions` IS emitted now (the client version gate)  # areaLockFlags was UN-FOLDED 2026-07-08 (dead-drop fix, area_locks.py) -> emitted again for ALL regions
+EXPECTED_KEYS = (_GF_CONTRACT_KEYS - _CONTRACT_NOT_EMITTED) | INFORMATIONAL_EXTRAS
+
+# REQUIRED greenfield contract keys (must always be present, per the contract).
+REQUIRED_KEYS = {k.name for k in contract.CONTRACT if k.required and k.in_profile("greenfield")}
+
+# The subset emitted UNCONDITIONALLY (every seed, whatever the options). The dungeon-sweep keys drop
+# when dungeon_sweep == "none".
+#
+# checkLotBlank* : MUTUALLY EXCLUSIVE by design, so no seed can emit all three. A regenerated
+# check_lots_data.py carries the ItemLotParam map/enemy SPLIT and the world emits checkLotBlankMap +
+# checkLotBlankEnemy; a pre-split data file emits the legacy merged checkLotBlank instead (and warns).
+# The split exists because the two param tables can hold the SAME row id -- a merged dict loses the
+# table, the client has to guess, it guessed map-first, and every enemy lot colliding with a map id was
+# therefore never blanked: the boss handed out its vanilla drop and no check fired.
+# requiresClientFeatures is emitted ONLY by a seed that uses a client-gated option (today: a
+# maximum_enemy_difficulty below 100). That conditionality is the whole point -- a default seed must
+# connect to any client -- so it belongs here with the other conditional keys, NOT in
+# _CONTRACT_NOT_EMITTED, which would stop anything from checking it is ever emitted at all.
+# graceAttunement is emitted only when `grace_attunement` > 0, and its default is 0 -- so a default
+# seed must NOT carry it. That is asserted positively over in
+# test_gf_grace_attunement.py::AttunementOff and ledgered in test_gf_off_means_off.py; here it just
+# has to stay out of the always-present set.
+ALWAYS_KEYS = EXPECTED_KEYS - {"dungeonSweepFlags",
+                              "checkLotBlank", "checkLotBlankMap", "checkLotBlankEnemy",
+                              "requiresClientFeatures", "graceAttunement"}
+
+
+class SlotDataFixtureRich(WorldTestBase):
+    """RICH options: every optional feature on -> exercises EVERY expected key.
+
+    The keyset must equal EXPECTED_KEYS exactly. If a source change adds a new key, sd.keys() -
+    EXPECTED_KEYS is non-empty -> fail. If it drops one, EXPECTED_KEYS - sd.keys() is non-empty ->
+    fail. Either way this file must be updated deliberately, and the client contract re-checked.
+    Shape/required validation is delegated to contract.validate_slot_data so it cannot go stale.
+    """
+    game = GAME
+    options = {"num_regions": 0, 
+        "item_shuffle": True,
+        "dungeon_sweep": "all",
+        "pool_builder_intensity": "max",
+        "ending_condition": "great_runes",
+        "goal_region_unlock_policy": "items_held",
+        "goal_great_runes": 2,
+        # Below 100 so the seed actually CAPS, which is what makes it emit
+        # requiresClientFeatures. RICH exists to exercise every key, so the honest fix for a new
+        # conditional key is to satisfy its condition here -- not to list it as never-emitted.
+        "maximum_enemy_difficulty": 50,
+        # On, so RICH actually emits graceAttunement -- per this class's own rule that a new
+        # conditional key is satisfied here rather than declared never-emitted. 4 is the playtest
+        # value; anything above 0 would do, but it must leave at least one region above the
+        # small-region skip or the key would be an empty dict.
+        "grace_attunement": 4,
+        # The blessing, on, via the option that REPLACED `global_scadutree_blessing` (split
+        # 2026-08-06). It no longer pulls in a key of its own -- the ceiling is gone -- but RICH
+        # should still exercise the live path rather than the deprecated alias. `anywhere` without
+        # catch-up: catch-up would ALSO pull in dlcScadutreeFloorRanges, which needs a kept DLC
+        # region and is a separate not-emitted entry with its own justification.
+        "scadutree_blessing_scope": "anywhere",
+    }
+
+    def test_exact_keyset(self):
+        sd = self.world.fill_slot_data()
+        got = set(sd.keys())
+        # checkLotBlank* are MUTUALLY EXCLUSIVE: a regenerated check_lots_data emits the map/enemy
+        # SPLIT (checkLotBlankMap + checkLotBlankEnemy); a pre-split one emits the legacy merged
+        # checkLotBlank and warns. Exactly one of the two shapes must be present -- never all three,
+        # never none (none = the vanilla ware is handed out at EVERY check).
+        _cl = {"checkLotBlank", "checkLotBlankMap", "checkLotBlankEnemy"}
+        self.assertTrue(got & _cl,
+                        "no check-lot blanking key at all -- the vanilla ware would be handed out at "
+                        "EVERY check")
+        missing = (EXPECTED_KEYS - _cl) - got
+        extra = got - EXPECTED_KEYS
+        self.assertFalse(missing,
+                         f"slot_data is MISSING expected client-contract keys: {sorted(missing)}")
+        self.assertFalse(extra,
+                         "slot_data has UNEXPECTED new keys not in the client contract: "
+                         f"{sorted(extra)} -- add them to the contract (or INFORMATIONAL_EXTRAS) "
+                         "and update the client on purpose")
+        # Compare with the mutually-exclusive check-lot keys factored out on BOTH sides (see above):
+        # a pre-split check_lots_data emits `checkLotBlank`, a regenerated one emits the Map/Enemy pair.
+        self.assertEqual(got - _cl, EXPECTED_KEYS - _cl)
+
+    def test_value_types(self):
+        # Delegate all shape/required checks to the single source of truth. Raises ContractError on
+        # any shape/required drift -- so this test tracks contract.py and never encodes shapes itself.
+        sd = self.world.fill_slot_data()
+        contract.validate_slot_data(sd, strict=True)
+
+    def test_structural_invariants(self):
+        sd = self.world.fill_slot_data()
+        # apIdsToItemIds: stringified-int keys -> int values; assert non-empty here.
+        self.assertTrue(sd["apIdsToItemIds"], "apIdsToItemIds must not be empty")
+        for k, v in sd["apIdsToItemIds"].items():
+            self.assertEqual(k, str(int(k)))
+            self.assertIsInstance(v, int)
+        # locationFlags: stringified-int keys -> SCALAR int values now; cover every hub+kept location.
+        kept = list(self.world._kept())
+        expected_locs = (sum(len(self.world._seed_locations(r)) for r in [HUB] + kept)
+                         + len(getattr(self.world, "gf_extra_locations", ())))  # feature-owned (finale)
+        self.assertEqual(len(sd["locationFlags"]), expected_locs,
+                         "locationFlags must cover every hub+kept location (+ feature-owned)")
+        for k, v in sd["locationFlags"].items():
+            self.assertEqual(k, str(int(k)))
+            self.assertIsInstance(v, int)
+        # region_count == len(kept)
+        self.assertEqual(sd["region_count"], len(kept),
+                         "region_count must equal the number of kept regions")
+        # the rich seed actually turned the optional features ON (proves the keys are exercised,
+        # not just present-and-empty).
+        self.assertEqual(sd["world_logic"], "region_lock")
+        self.assertTrue(sd["dungeonSweepFlags"], "dungeon_sweep=all must emit sweep flags")
+        self.assertFalse(sd["options"]["reveal_sweep_boss_names"],
+                         "hidden sweep boss names must remain opt-in (#1184)")
+        # progressive_* is FROZEN OFF (defaults.py) -> progressiveGrants is emitted but empty.
+        self.assertIsInstance(sd["progressiveGrants"], dict)
+        self.assertTrue(sd["regionGraces"], "region locks must light region graces (bundle)")
+
+    def test_required_keys_present(self):
+        # every REQUIRED greenfield contract key must be present.
+        sd = self.world.fill_slot_data()
+        missing = REQUIRED_KEYS - set(sd.keys())
+        self.assertFalse(missing, f"slot_data missing REQUIRED contract keys: {sorted(missing)}")
+
+    def test_determinism_same_world_twice(self):
+        # fill_slot_data() on the same world twice returns equal keysets (and equal payloads).
+        a = self.world.fill_slot_data()
+        b = self.world.fill_slot_data()
+        self.assertEqual(set(a.keys()), set(b.keys()),
+                         "fill_slot_data must return a stable keyset across calls")
+        self.assertEqual(a, b, "fill_slot_data must be deterministic on the same world")
+
+
+class SlotDataFixtureDefault(WorldTestBase):
+    """DEFAULT options: the always-present keys must still be there and pass the contract.
+
+    Everything is left at its option default. NOTE: dungeon_sweep DEFAULTS to "all", so the
+    three sweep keys are present by default too; the default class therefore asserts a SUPERSET of
+    ALWAYS_KEYS (>=), not an exact match -- the exact-keyset contract guard lives in the rich class.
+    """
+    game = GAME
+    options = {"num_regions": 0, "ending_condition": "region_locks", "goal_region_unlock_policy": "items_held"}
+
+    def test_always_keys_present(self):
+        sd = self.world.fill_slot_data()
+        got = set(sd.keys())
+        missing = ALWAYS_KEYS - got
+        self.assertFalse(missing,
+                         f"default seed is MISSING always-present contract keys: {sorted(missing)}")
+        # nothing outside the full contract may appear even at defaults.
+        extra = got - EXPECTED_KEYS
+        self.assertFalse(extra,
+                         f"default seed emitted keys outside the contract: {sorted(extra)}")
+
+    def test_value_types(self):
+        sd = self.world.fill_slot_data()
+        contract.validate_slot_data(sd, strict=True)
+
+    def test_bundle_graces_emitted(self):
+        # region locks always light their region's graces (bundle) -> regionGraces present + non-empty.
+        sd = self.world.fill_slot_data()
+        self.assertIn("regionGraces", sd)
+        self.assertTrue(sd["regionGraces"], "region locks must light region graces")
+
+    def test_determinism_same_world_twice(self):
+        a = self.world.fill_slot_data()
+        b = self.world.fill_slot_data()
+        self.assertEqual(set(a.keys()), set(b.keys()))
+        self.assertEqual(a, b)
+
+
+class SweepBossNameRevealOptIn(WorldTestBase):
+    """#1184: the YAML toggle crosses the seed/client boundary without changing sweep data."""
+    game = GAME
+    options = {"reveal_sweep_boss_names": True}
+
+    def test_opt_in_is_emitted(self):
+        sd = self.world.fill_slot_data()
+        self.assertTrue(sd["options"]["reveal_sweep_boss_names"])
+        self.assertTrue(sd["dungeonSweepFlags"],
+                        "the presentation toggle must not disable or replace sweep membership")

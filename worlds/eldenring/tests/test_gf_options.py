@@ -1,0 +1,1364 @@
+"""Options-description gate (greenfield analog of the eldenring options-description gate).
+
+Every greenfield/feature option this world defines must carry a non-empty class docstring -- that
+docstring is the description the options wizard / webhost surfaces, so a blank one ships a mystery
+knob. AP-common options (DeathLink and friends, whose class __module__ is "Options") are inherited,
+not ours to document, so they're skipped. WorldTestBase; importorskips when AP isn't importable
+(source-tree sandbox), so it's a no-op there and only runs once the world is installed under
+Archipelago/worlds/.
+
+Run (from the Archipelago dir, world installed):
+    python -m pytest worlds/eldenring/tests/test_gf_options.py
+"""
+import dataclasses
+import typing
+
+import pytest
+
+WorldTestBase = pytest.importorskip("test.bases").WorldTestBase
+pytest.importorskip("worlds.eldenring")
+
+GAME = "Elden Ring"
+
+
+@pytest.mark.parametrize("seed", [42, 99])
+@pytest.mark.parametrize("bingo", [False, True])
+@pytest.mark.parametrize("mode", [None, True, False])
+def test_bingo_scaling_default_and_explicit_overrides(seed, bingo, mode):
+    """Generate and fill real runs; both copies of the client switch must agree."""
+    from test.general import setup_multiworld
+    from worlds.AutoWorld import AutoWorldRegister
+    from Fill import distribute_items_restrictive
+    options = {"num_regions": 6, "bingo_mode": bingo}
+    if mode is not None:
+        options["enemy_scaling"] = mode
+    mw = setup_multiworld(AutoWorldRegister.world_types[GAME], seed=seed, options=options)
+    distribute_items_restrictive(mw)
+    world = mw.worlds[1]
+    world.post_fill()
+    sd = world.fill_slot_data()
+    expected = 4 if (not bingo if mode is None else mode) else 0
+    assert sd["completion_scaling"] == expected
+    assert sd["options"]["completion_scaling"] == expected
+    assert mw.can_beat_game()
+
+
+@pytest.mark.parametrize("goal", ["line", "count", "blackout"])
+@pytest.mark.parametrize("seed", [1, 7, 22222])
+def test_bingo_seeded_fill(goal, seed):
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.features.bingo import square_ids
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"bingo_mode": True, "bingo_goal": goal, "num_regions": 12}
+
+    t = _T()
+    loc = None
+    try:
+        t.world_setup(seed=seed)
+        board = t.world.gf_bingo_board
+        assert len(board) == 25
+        assert len({c["flag"] for c in board}) == 25
+        assert len(t.multiworld.itempool) == len(t.multiworld.get_unfilled_locations(t.player))
+        distribute_items_restrictive(t.multiworld)
+        assert t.multiworld.can_beat_game()
+        for loc in t.multiworld.get_locations(t.player):
+            if loc.item and loc.item.advancement and loc.address is not None:
+                assert loc.address in square_ids(t.world)
+        sd = t.world.fill_slot_data()
+        assert sd["goalLocations"] == []
+        assert sd["bingoBoard"]["goal"] == goal
+        assert set(sd["progressionSurfaceLocations"]) == square_ids(t.world)
+        payout = set(sd["bingoBoard"]["line_sweep"])
+        assert len(payout) <= 20
+        native_flags = sd["locationFlags"]
+        assert {c["flag"] for c in board}.isdisjoint(native_flags.values())
+        for aid in payout:
+            flag = native_flags[str(aid)]
+            assert {int(k) for k, value in native_flags.items() if value == flag} <= payout
+        assert payout.isdisjoint(square_ids(t.world))
+        assert all(not mwloc.item.advancement for mwloc in t.multiworld.get_locations(t.player)
+                   if mwloc.address in payout)
+        assert payout.isdisjoint({ap for members in sd.get("dungeonSweepFlags", {}).values() for ap in members})
+        t.world.post_fill()
+    finally:
+        loc = None
+        t.tearDown()
+
+
+@pytest.mark.parametrize("other_bingo", [False, True])
+def test_bingo_two_player_fill(other_bingo):
+    from test.general import setup_multiworld
+    from worlds.AutoWorld import AutoWorldRegister
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.features.bingo import square_ids
+    world_type = AutoWorldRegister.world_types[GAME]
+    mw = setup_multiworld([world_type, world_type], seed=42 if other_bingo else 22222, options=[
+        {"num_regions": 12, "bingo_mode": True},
+        {"num_regions": 12 if other_bingo else 3, "bingo_mode": other_bingo}])
+    assert len(mw.itempool) == len(mw.get_unfilled_locations())
+    distribute_items_restrictive(mw)
+    assert mw.can_beat_game()
+    for player in (1, 2) if other_bingo else (1,):
+        board_ids = square_ids(mw.worlds[player])
+        for loc in mw.get_locations(player):
+            if loc.item and loc.item.advancement and loc.address is not None:
+                assert loc.address in board_ids
+        mw.worlds[player].post_fill()
+
+
+def test_bingo_foreign_advancement_is_restricted_to_squares():
+    from test.general import setup_multiworld, TestWorld
+    from worlds.AutoWorld import AutoWorldRegister
+    from BaseClasses import ItemClassification
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.features.bingo import square_ids
+    mw = setup_multiworld([AutoWorldRegister.world_types[GAME], TestWorld], seed=111,
+                         options=[{"num_regions": 12, "bingo_mode": True}, {}])
+    probe = next(i for i in mw.itempool if not i.advancement)
+    probe.player, probe.name = 2, "Foreign bingo progression probe"
+    probe.classification = ItemClassification.progression
+    distribute_items_restrictive(mw)
+    host = next(loc for loc in mw.get_locations(1) if loc.item is probe)
+    assert host.address in square_ids(mw.worlds[1])
+
+
+@pytest.mark.parametrize("extra", [
+    {"vanilla_placement": "all"},
+    {"start_inventory": {"Boltdrake Talisman +3": 1}},
+    {"start_inventory": {"Progressive Boltdrake Talisman": 1}},
+])
+def test_progressive_talisman_conflicts_reject_before_fill(extra):
+    from Options import OptionError
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"progressive_talismans": True, **extra}
+
+    with pytest.raises(OptionError, match="progressive_talismans"):
+        _T().world_setup(seed=1)
+
+
+@pytest.mark.parametrize("seed", [1, 7, 22222])
+@pytest.mark.parametrize("extra", [
+    {"num_regions": 3, "enable_dlc": False},
+    {"num_regions": 6, "enable_dlc": True},
+    {"num_regions": 0, "dlc_only": True},
+])
+def test_progressive_talisman_seeded_fill(extra, seed):
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.features.power_progression import families, FEATURE_TAG
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"progressive_talismans": True, **extra}
+
+    t = _T()
+    t.world_setup(seed=seed)
+    distribute_items_restrictive(t.multiworld)
+    assert t.multiworld.can_beat_game()
+    assert not t.multiworld.get_unfilled_locations(t.player)
+    members = {member for ladder in families(t.world.tables.item_catalog,
+               t.world.gf_dlc_excluded).values() for member in ladder}
+    assert not any(loc.item.name in members for loc in t.multiworld.get_locations(t.player) if loc.item)
+    sd = t.world.fill_slot_data()
+    assert FEATURE_TAG in sd["requiresClientFeatures"]
+    for name, ladder in sd["progressiveGrants"].items():
+        if name.startswith("Progressive ") and any(r.get("goods", 0) >> 28 == 2 for r in ladder):
+            assert all(r["goods"] >> 28 == 2 and r["consumed"] for r in ladder)
+
+
+@pytest.mark.parametrize("fludd", [False, True])
+@pytest.mark.parametrize("stats", [False, True])
+@pytest.mark.parametrize("seed", [1, 7, 22222])
+@pytest.mark.parametrize("extra", [
+    {"enable_dlc": False, "armor_bundles": "off"},
+    {"enable_dlc": True, "armor_bundles": "sets", "start_regions": 3},
+    {"dlc_only": True, "armor_bundles": "mixed"},
+    {"num_regions": 0, "enable_dlc": False, "protect_missable_locations": "off"},
+])
+def test_mario_mode_seeded_fill_combinations(extra, seed, stats, fludd):
+    """Real AP restrictive fill, beyond WorldTestBase's region/item construction (#1619)."""
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring import contract
+    from worlds.eldenring.features.mario_mode import (
+        GOLDMASK_AP_ID, REGRESSION, REGRESSION_FEATURE, REGRESSION_REGION, equipment_reward,
+    )
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 6, "mario_mode": True, "mario_stat_upgrades": stats,
+                   "mario_fludd": fludd, **extra}
+
+    t = _T()
+    t.world_setup(seed=seed)
+    items = None
+    gesture = None
+    try:
+        distribute_items_restrictive(t.multiworld)
+        assert not t.multiworld.get_unfilled_locations(t.player)
+        assert t.multiworld.can_beat_game()
+        items = [loc.item for loc in t.multiworld.get_locations(t.player) if loc.item]
+        expected = {name for _key, name in contract.MARIO_UNLOCK_ITEM_NAMES}
+        assert expected <= {item.name for item in items}
+        assert sum(item.name == "Progressive Jump" for item in items) == 2
+        assert not any(equipment_reward(t.world, item.name) for item in items)
+        royal = REGRESSION_REGION in t.world._kept()
+        assert sum(item.name == REGRESSION for item in items) == int(royal)
+        gesture = next((loc for loc in t.multiworld.get_locations(t.player)
+                        if loc.address == GOLDMASK_AP_ID), None)
+        assert (gesture is not None) == royal
+        if gesture:
+            assert gesture.item.name != REGRESSION
+        sd = t.world.fill_slot_data()
+        assert contract.MARIO_CAPABILITIES_FEATURE in sd["requiresClientFeatures"]
+        assert REGRESSION_FEATURE in sd["requiresClientFeatures"]
+        stat_keys = {key for key, _name, _aid, _count in contract.MARIO_STAT_ITEMS}
+        assert set(sd["abilityUnlockItems"].values()) == (
+            set(contract.MARIO_CAPABILITY_KEYS) | (stat_keys if stats else set())
+            | ({key for key, _name, _aid, _count in contract.MARIO_FLUDD_ITEMS}
+               if fludd else set()))
+        assert (contract.MARIO_STATS_FEATURE in sd["requiresClientFeatures"]) == stats
+        assert (contract.MARIO_FLUDD_FEATURE in sd["requiresClientFeatures"]) == fludd
+        assert sd["options"].get("mario_fludd", 0) == int(fludd)
+        for _key, name, _aid, count in contract.MARIO_FLUDD_ITEMS:
+            assert sum(item.name == name for item in items) == (count if fludd else 0)
+        assert sd["options"].get("mario_stat_upgrades", 0) == int(stats)
+        for _key, name, _aid, count in contract.MARIO_STAT_ITEMS:
+            assert sum(item.name == name for item in items) == (count if stats else 0)
+    finally:
+        del items, gesture
+        t.tearDown()
+
+
+@pytest.mark.parametrize("extra,message", [
+    ({"mario_mode": False, "mario_cappy": True}, "mario_cappy requires mario_mode"),
+    ({"mario_mode": False, "mario_sonic_movement": True}, "mario_sonic_movement requires mario_mode"),
+    ({"start_inventory": {"Cap Throw": 1}}, "Cappy start inventory"),
+    ({"start_inventory": {"Air Dash": 1}}, "Sonic movement start inventory"),
+    ({"mario_cappy": True, "auto_equip": True}, "auto_equip must be off"),
+    ({"mario_sonic_movement": True, "vanilla_placement": "all"}, "vanilla_placement must be off"),
+    ({"mario_mode": False, "mario_fludd": True}, "mario_fludd requires mario_mode"),
+    ({"start_inventory": {"Hover Nozzle": 1}}, "FLUDD start inventory"),
+    ({"mario_mode": False, "start_inventory": {"Progressive FLUDD Tank": 1}}, "FLUDD start inventory"),
+    ({"mario_fludd": True, "vanilla_placement": "all"}, "vanilla_placement must be off"),
+    ({"mario_fludd": True, "trap_link": True}, "trap_link must be off"),
+    ({"mario_fludd": True, "traps": ["no_flask"], "trap_count": 1}, "remove no_flask"),
+    ({"mario_mode": False, "mario_stat_upgrades": True}, "requires mario_mode"),
+    ({"mario_mode": False, "start_inventory": {"Progressive Health": 1}}, "stat start inventory"),
+    ({"start_inventory": {"Progressive Health": 1}}, "stat start inventory"),
+    ({"start_inventory": {"Progressive Power": 1}}, "stat start inventory"),
+    ({"mario_stat_upgrades": True, "auto_equip": True}, "auto_equip must be off"),
+    ({"vanilla_placement": "all"}, "vanilla_placement must be off"),
+    ({"auto_equip": True}, "auto_equip must be off"),
+    ({"locked_abilities": ["jump"]}, "locked_abilities must be empty"),
+    ({"locked_abilities": ["heal"]}, "locked_abilities must be empty"),
+    ({"death_link": True}, "death_link must be off"),
+    ({"trap_link": True}, "trap_link must be off"),
+    ({"traps": ["no_flask"], "trap_count": 1}, "remove no_flask"),
+])
+def test_mario_mode_invalid_combinations_fail_at_generation(extra, message):
+    from Options import OptionError
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 6, "mario_mode": True, **extra}
+
+    with pytest.raises(OptionError, match=message):
+        _T().world_setup(seed=7)
+
+
+@pytest.mark.parametrize("tier", ["all", "landmarks", "entrance"])
+@pytest.mark.parametrize("threshold", [0, 1, 4, 10])
+@pytest.mark.parametrize("anchor", ["front_door", "random_grace"])
+def test_mountaintops_unlock_reaches_both_sides_of_rold(tier, threshold, anchor):
+    """#1568: an interior Hero's Grave warp cannot replace upper outdoor access."""
+    from worlds.eldenring import contract
+
+    class _T(WorldTestBase):
+        game = GAME
+        run_default_tests = False
+        options = {"num_regions": 0, "region_grace_unlock": tier,
+                   "grace_attunement": threshold, "grace_attunement_anchor": anchor}
+
+    t = _T()
+    t.setUp()
+    try:
+        first = t.world.fill_slot_data()
+        second = t.world.fill_slot_data()
+        key = "Mountaintops of the Giants Lock"
+        lit = first[contract.REGION_GRACES][key]
+        # grace_names.tsv: Forbidden Lands BELOW Rold; Zamor Ruins ABOVE it.
+        assert {76500, 76501} <= set(lit)
+        assert first[contract.REGION_GRACES] == second[contract.REGION_GRACES]
+        gates = first.get(contract.GRACE_ATTUNEMENT, {})
+        assert gates == second.get(contract.GRACE_ATTUNEMENT, {})
+        if key in gates:
+            gate = gates[key]
+            assert not set(lit) & set(gate["members"])
+            assert len(gate["members"]) > gate["threshold"]
+    finally:
+        t.tearDown()
+
+
+class OptionsDescriptionGate(WorldTestBase):
+    game = GAME
+
+    def test_every_feature_option_has_a_description(self):
+        dc = self.world.options_dataclass
+        # Resolve field annotations to the actual Option classes (fields store the type).
+        hints = typing.get_type_hints(dc)
+        missing = []
+        checked = 0
+        for f in dataclasses.fields(dc):
+            opt_cls = hints.get(f.name, f.type)
+            module = getattr(opt_cls, "__module__", "") or ""
+            # AP-common options live in the top-level Options module -> inherited, not ours.
+            if module.startswith("Options"):
+                continue
+            checked += 1
+            doc = getattr(opt_cls, "__doc__", None)
+            if not (doc and doc.strip()):
+                missing.append(f.name)
+        self.assertGreater(
+            checked, 0, "no greenfield/feature options found -- gate would be vacuous")
+        self.assertEqual(
+            missing, [],
+            "these greenfield/feature options have an empty class docstring (description): "
+            + ", ".join(missing))
+
+
+# ---------------------------------------------------------------------------------------------
+# completion_scaling_floor -- the option matrix for the difficulty floor (un-frozen 2026-07-27).
+#
+# CONTRIBUTING's headline gate: flip the option, in combination with the existing ones, and get a
+# clean gen. The floor is emitted through core._options_echo AFTER a unit conversion
+# (scaling_ladder.floor_multiplier), so the combinations that matter are the ones that change the
+# SHAPE of the scaling wire around it -- a one-region seed (no depth to ramp over, max_target == 0,
+# where the client resolves EVERY region to the floor) and a DLC-only seed (a different kept set and
+# the only configuration that can also emit dlcScadutreeFloorRanges).
+#
+# The units themselves are gated in test_gf_scaling_floor_units.py / test_gf_scaling_ladder_mirror.py;
+# this is the combination sweep, not a third copy of that assertion.
+# ---------------------------------------------------------------------------------------------
+def test_a_default_all_regions_seed_spans_the_WHOLE_ladder():
+    """THE REGRESSION THIS CATCHES, and it is not a fill failure.
+
+    A broken order-ramp emits one target for every region. The seed still generates, every fill check
+    still passes, and the player just... never sees difficulty change. Verified by breaking it
+    (2026-07-27): forcing a constant target collapsed the span from 19 to 6.
+
+    Note it did NOT go flat -- `_SCALING_BUCKET_DELTA` bumps a Caelid bucket, so at least two tiers
+    survive any breakage that keeps Caelid. A "did every region get the same tier?" check would have
+    called that break healthy. The SPAN is the property with teeth.
+    """
+    from worlds.eldenring import contract, scaling_ladder
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 0}
+
+    t = _T()
+    t.setUp()
+    try:
+        sd = t.world.fill_slot_data()
+    finally:
+        t.tearDown()
+
+    n = len(scaling_ladder.SCALING_HP_LADDER)
+    targets = [x for _lo, _hi, x in sd[contract.REGION_SPHERE_TARGET_RANGES]]
+    mx = max(targets)
+    assert mx > 0, "every region emitted target 0 -- the ramp produced no curve at all"
+    tiers = sorted(round(x / mx * (n - 1)) for x in targets)
+    assert tiers[0] == 0, f"shallowest region is tier {tiers[0]}, expected 0 at a default floor"
+    assert tiers[-1] == n - 1, f"deepest region is tier {tiers[-1]}, expected the top rung {n - 1}"
+    assert len(set(tiers)) >= n // 2, (
+        f"the curve resolved to only {len(set(tiers))} distinct tiers out of {n}. An all-regions "
+        f"seed at default settings should populate most of the ladder; this many collisions means "
+        f"the ramp collapsed.")
+
+
+_FLOORS = (0, 25, 100)
+_COMBOS = (
+    ("base_all_regions", {}),
+    # the rune goal keeps 1-region legal after #768 (core._lint_goal_reachability)
+    ("one_region", {"num_regions": 1, "ending_condition": "great_runes"}),
+    ("small_rolled", {"num_regions": 4}),
+    ("dlc", {"enable_dlc": True}),
+    ("dlc_only", {"dlc_only": True}),
+)
+
+
+@pytest.mark.parametrize("floor", _FLOORS)
+@pytest.mark.parametrize("label,extra", _COMBOS, ids=[c[0] for c in _COMBOS])
+def test_scaling_floor_combinations_generate_clean(floor, label, extra):
+    """Every floor x seed-shape combination must generate and emit a well-formed wire -- no
+    OptionError, no stack trace, no silently-absent key."""
+    from worlds.eldenring import contract, scaling_ladder
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = dict(extra, minimum_enemy_difficulty=floor)
+
+    t = _T()
+    t.setUp()
+    try:
+        sd = t.world.fill_slot_data()
+    finally:
+        t.tearDown()
+
+    nested = sd["options"]["completion_scaling_floor"]
+    assert nested == scaling_ladder.floor_multiplier(floor), (
+        "%s @ floor=%d: options.completion_scaling_floor is %r, expected the converted multiplier %r"
+        % (label, floor, nested, scaling_ladder.floor_multiplier(floor)))
+    assert sd["completion_scaling_floor"] == floor, (
+        "%s @ floor=%d: the top-level legacy copy must stay the raw percent" % (label, floor))
+
+    # The floor rides alongside the target wire; it must not disturb it. An EMPTY wire is the one
+    # shape the client refuses to arm on (scaling.rs parse_scaling_config H4/R6), so assert presence
+    # rather than assuming it (CONTRIBUTING rule 2: an empty result is a failure, not a clean run).
+    ranges = sd[contract.REGION_SPHERE_TARGET_RANGES]
+    assert ranges, ("%s @ floor=%d: regionSphereTargetRanges is EMPTY -- the client would refuse to "
+                    "arm enemy scaling and leave every enemy vanilla." % (label, floor))
+    assert all(len(t3) == 3 and t3[0] == t3[1] for t3 in ranges), (
+        "%s @ floor=%d: malformed [lo, hi, target] triples" % (label, floor))
+
+
+# ---------------------------------------------------------------------------------------------
+# region_grace_unlock -- the combination sweep for single-grace mode (added 2026-07-29).
+#
+# CONTRIBUTING's headline gate: a new option must generate cleanly in combination with the ones it
+# can interact with. This one touches the grace BUNDLE, so what matters is what changes which
+# regions exist and which bundles are withheld -- num_regions and natural_progression. It moves no
+# item and gates nothing, so these assert exactly that rather than just "it genned".
+# ---------------------------------------------------------------------------------------------
+_GRACE_COMBOS = (
+    ("default",           "all",       {}),
+    ("landmarks",         "landmarks", {}),
+    ("landmarks_small",   "landmarks", {"num_regions": 6}),
+    ("landmarks_natural", "landmarks", {"natural_progression": True}),
+    # DLC on purpose: the landmarks partition follows the WARP MENU, not region size, and the DLC is
+    # where that bites -- Gravesite 17 graces -> 1, Scadu Altus 17 -> 1. Accepted, but a seed that
+    # generates DLC regions must still emit a well-formed bundle for them.
+    ("landmarks_dlc",     "landmarks", {"enable_dlc": True}),
+    ("entrance",          "entrance",  {}),
+    ("entrance_small",    "entrance",  {"num_regions": 6}),
+    ("entrance_natural",  "entrance",  {"natural_progression": True}),
+)
+
+
+def _grace_world(mode, extra, seed=4242):
+    """A world at a PINNED seed.
+
+    The seed is not decoration. `setUp()` leaves the seed unset, so AP picks a fresh random one per
+    instantiation -- and the item-pool comparison below then diffs two different SEEDS and blames
+    the option. It failed exactly that way when first written ('Black Blade' != 'Bewitching Branch'
+    at index 329, pure filler RNG). Any cross-world comparison has to hold the seed fixed or it is
+    measuring noise."""
+    class _T(WorldTestBase):
+        game = GAME
+        options = dict(extra, region_grace_unlock=mode)
+    t = _T("runTest")
+    t.options = dict(extra, region_grace_unlock=mode)
+    t.world_setup(seed)
+    return t
+
+
+@pytest.mark.parametrize("label,mode,extra", _GRACE_COMBOS, ids=[c[0] for c in _GRACE_COMBOS])
+def test_region_grace_unlock_combinations_generate_clean(label, mode, extra):
+    from worlds.eldenring.features.graces import bundle_withheld
+    t = _grace_world(mode, extra)
+    try:
+        sd = t.world.fill_slot_data()
+        rg = sd["regionGraces"]
+        assert rg, "%s: no regionGraces emitted at all" % label
+        if mode == "entrance":
+            over = {k: len(v) for k, v in rg.items() if len(v) > 1}
+            expected = {key: 2 for key in ("Ainsel River Lock", "Mountaintops of the Giants Lock")
+                        if key in rg}
+            assert over == expected, (
+                "%s: multi-component entrance bundles changed: got %s, expected %s. Entrance "
+                "normally means one front door; #806 requires two for Ainsel and #1568 requires "
+                "outdoor entries below and above Rold." % (label, over, expected))
+        elif mode == "landmarks":
+            from worlds.eldenring.tables.region_graces import (
+                REGION_GRACE_LANDMARKS, REGION_GRACE_POINTS)
+            for k, got in rg.items():
+                if not got:
+                    continue                       # withheld; asserted separately below
+                region = k[: -len(" Lock")]
+                want = sorted(f for f in REGION_GRACE_LANDMARKS.get(region, ())
+                              if f in REGION_GRACE_POINTS.get(region, ()))
+                # Explicit traversal witnesses (#806/#1568) supplement the warp-menu groups.
+                # Keep this fixture independent of the production component table.
+                component_entries = {"Ainsel River": [71211, 71218],
+                                     "Mountaintops of the Giants": [76500, 76501]}
+                want = sorted(set(want) | set(component_entries.get(region, ())))
+                assert got == (want or [min(got)]), (
+                    "%s: %s got %s, expected generated landmarks plus required component "
+                    "entrances %s." % (label, region, got, want))
+        else:
+            assert sum(len(v) for v in rg.values()) > len(rg), (
+                "%s: `all` should grant many graces per region; the default changed" % label)
+        # The half that matters: entrance mode must never become a way past a wall.
+        leaked = [k for k in rg if rg[k] and bundle_withheld(t.world, k[: -len(" Lock")])]
+        assert not leaked, (
+            "%s: a gated child behind an armed wall was granted a grace anyway (%s). Entrance mode "
+            "must not open a door the `all` bundle deliberately withholds." % (label, leaked))
+    finally:
+        pass
+
+
+def test_entrance_mode_moves_no_item_and_no_check():
+    """A convenience setting: same checks, same pool, only the warp bundle differs."""
+    a = _grace_world("all", {}, seed=4242)
+    sd_a = a.world.fill_slot_data()
+    pool_a = sorted(i.name for i in a.multiworld.itempool if i.player == a.player)
+    e = _grace_world("entrance", {}, seed=4242)   # SAME seed -- see _grace_world
+    sd_e = e.world.fill_slot_data()
+    pool_e = sorted(i.name for i in e.multiworld.itempool if i.player == e.player)
+    assert sd_a["locationFlags"] == sd_e["locationFlags"], (
+        "region_grace_unlock changed the CHECK set -- it must only change which graces a lock lights")
+    assert pool_a == pool_e, "region_grace_unlock changed the ITEM POOL; it must not"
+
+
+def test_the_three_tiers_are_nested_and_strictly_ordered():
+    """entrance subset-of landmarks subset-of all, per region -- and strictly smaller overall.
+
+    This is the invariant that makes the option legible: a coarser tier can only ever REMOVE warp
+    points, never swap them for different ones. If landmarks ever picked a grace `all` does not
+    grant, or entrance picked one outside landmarks, the tiers would not be a ladder and a player
+    moving one notch could LOSE a grace they expected to keep and gain one they did not ask for.
+    """
+    seen = {}
+    for tier in ("all", "landmarks", "entrance"):
+        w = _grace_world(tier, {}, seed=4242)
+        seen[tier] = w.world.fill_slot_data()["regionGraces"]
+
+    for lock, wide in seen["all"].items():
+        mid, narrow = seen["landmarks"].get(lock, []), seen["entrance"].get(lock, [])
+        assert set(mid) <= set(wide), (
+            "%s: landmarks granted %s which `all` does not -- the tiers are not nested"
+            % (lock, sorted(set(mid) - set(wide))))
+        assert set(narrow) <= set(mid), (
+            "%s: entrance granted %s which landmarks does not -- the tiers are not nested"
+            % (lock, sorted(set(narrow) - set(mid))))
+
+    totals = {t: sum(len(v) for v in rg.values()) for t, rg in seen.items()}
+    assert totals["all"] > totals["landmarks"] > totals["entrance"], (
+        "the three tiers must be strictly decreasing in size; got %s. If landmarks has collapsed "
+        "onto entrance the middle setting is pointless, and if it has collapsed onto `all` it is "
+        "not doing anything." % totals)
+
+
+def test_landmarks_is_the_middle_setting_where_it_matters():
+    """Regions the warp menu genuinely splits must get more than one grace at `landmarks`.
+
+    The tier is UNEVEN by construction (it follows the menu, not region size) and three regions
+    legitimately reduce to a single grace -- Gravesite, Scadu Altus and Weeping, accepted 2026-07-29.
+    So this does not demand a floor everywhere; it demands that the big base-game regions the menu
+    DOES split still come out split, which is the whole point of offering a middle setting."""
+    w = _grace_world("landmarks", {}, seed=4242)
+    rg = w.world.fill_slot_data()["regionGraces"]
+    for region in ("Liurnia", "Caelid", "Limgrave", "Altus"):
+        got = rg.get("%s Lock" % region)
+        if got is None:
+            continue                               # not kept in this seed
+        assert len(got) > 1, (
+            "%s reduced to %d grace(s) at `landmarks`. That region's sub-areas are exactly what the "
+            "middle tier exists to expose; if the partition changed, re-verify it BY NAME before "
+            "re-baselining this." % (region, len(got)))
+
+
+def test_mt_gelmir_landmarks_reaches_the_seethewater_basin():
+    """The warp menu merges areas that the traversal graph does not (#1136)."""
+    from ..tables.region_graces import REGION_GRACE_LANDMARKS, REGION_GRACE_POINTS
+
+    assert 76354 in REGION_GRACE_LANDMARKS["Mt. Gelmir"], (
+        "Mt. Gelmir landmarks must include Seethewater River so basin checks are reachable")
+    assert set(REGION_GRACE_LANDMARKS["Mt. Gelmir"]) <= set(REGION_GRACE_POINTS["Mt. Gelmir"])
+
+
+# ---------------------------------------------------------------------------------------------
+# no_runes_in_shops -- the combination sweep (added 2026-07-30).
+#
+# CONTRIBUTING's headline gate: a new option must generate cleanly in combination with the options
+# it can interact with. This one constrains FILL (rune items x shop locations), so what matters is
+# what changes the shop-row/location ratio and the rune supply: num_regions (the hub is 185 shop
+# rows out of 221 locations, so a small seed is the shop-heaviest shape there is) and the DLC pair
+# (a different kept set, the DLC rune family in the pool). The assertion is the MOTIVATING CASE per
+# combo -- no own rune behind a purchase menu after a real fill -- not just "it genned".
+# ---------------------------------------------------------------------------------------------
+_NRIS_COMBOS = (
+    ("on_base",         {"no_runes_in_shops": True}),
+    ("on_one_region",   {"no_runes_in_shops": True, "num_regions": 1, "ending_condition": "great_runes"}),
+    ("on_small_rolled", {"no_runes_in_shops": True, "num_regions": 4}),
+    ("on_dlc",          {"no_runes_in_shops": True, "enable_dlc": True}),
+    ("on_dlc_only",     {"no_runes_in_shops": True, "dlc_only": True}),
+)
+
+
+@pytest.mark.parametrize("label,opts", _NRIS_COMBOS, ids=[c[0] for c in _NRIS_COMBOS])
+def test_no_runes_in_shops_combinations_fill_clean(label, opts):
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.tables.shop_data import SHOP_ROW_FLAGS
+    from worlds.eldenring.features.rune_pricing import is_rune_item
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = dict(opts)
+
+    t = _T("runTest")
+    t.options = dict(opts)
+    t.world_setup(20260730)                      # pinned seed: a red run must be reproducible
+    distribute_items_restrictive(t.multiworld)
+    player = t.world.player
+    offenders = [l for l in t.multiworld.get_locations(player)
+                 if getattr(l, "address", None) is not None
+                 and str(l.address) in SHOP_ROW_FLAGS
+                 and l.item is not None and l.item.player == player
+                 and is_rune_item(l.item.name)]
+    assert not offenders, (
+        "%s: own money runes landed on %d shop checks (first: %s)"
+        % (label, len(offenders), offenders[0].name if offenders else ""))
+
+
+# ---------------------------------------------------------------------------------------------
+# keep_out_of_shops -- the combination sweep (added 2026-08-10, boblerrr's [weapons, armor] ask).
+#
+# Same reasoning as the no_runes_in_shops sweep above, with one difference that matters: this option
+# CONSTRAINS FILL HARD ENOUGH TO SKIP, so the sweep's job is not only "it gens" but "it gens whether
+# or not the capacity gate fired". num_regions walks it across that boundary. The three named
+# one-region fixtures are #903's real failures: Ensis stranded Cipher Pata at Enia on main, while
+# Abyssal and Jagged Peak left 16 and 10 items unplaced under the same option. `goods` is swept
+# because an umbrella expands to eight categories at once and is the widest ban a yaml can express
+# in one word.
+# ---------------------------------------------------------------------------------------------
+_KOS_COMBOS = (
+    ("gear_full_world",   {"keep_out_of_shops": {"weapons", "armor"}, "num_regions": 0},
+     20260810, None),
+    ("gear_one_region_ensis",
+     {"keep_out_of_shops": {"weapons", "armor"}, "num_regions": 1,
+      "ending_condition": "great_runes"}, 31, "Ensis"),
+    ("gear_one_region_abyssal",
+     {"keep_out_of_shops": {"weapons", "armor"}, "num_regions": 1,
+      "ending_condition": "great_runes"}, 1, "Abyssal"),
+    ("gear_one_region_jagged_peak",
+     {"keep_out_of_shops": {"weapons", "armor"}, "num_regions": 1,
+      "ending_condition": "great_runes"}, 11, "Jagged Peak"),
+    ("gear_small_rolled", {"keep_out_of_shops": {"weapons", "armor"}, "num_regions": 4},
+     20260810, None),
+    ("goods_umbrella",    {"keep_out_of_shops": {"goods"}, "num_regions": 4},
+     20260810, None),
+    ("everything",        {"keep_out_of_shops": {"everything"}, "num_regions": 4},
+     20260810, None),
+    ("gear_dlc",          {"keep_out_of_shops": {"weapons", "armor"}, "enable_dlc": True},
+     20260810, None),
+    ("gear_dlc_only",     {"keep_out_of_shops": {"weapons", "armor"}, "dlc_only": True},
+     20260810, None),
+)
+
+
+@pytest.mark.parametrize("label,opts,seed,expected_region", _KOS_COMBOS,
+                         ids=[c[0] for c in _KOS_COMBOS])
+def test_keep_out_of_shops_combinations_fill_clean(label, opts, seed, expected_region):
+    """Gens clean, and where the gate did NOT skip a category, that category really is absent from
+    every purchase menu. Asserting only "it genned" would pass just as happily on an option that
+    skipped everything, every time."""
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.tables.shop_data import SHOP_ROW_FLAGS
+    from worlds.eldenring.features.keep_out_of_shops import _PROGRESSIVE_NAMES
+    from worlds.eldenring.item_categories import expand, names_in
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = dict(opts)
+
+    t = _T("runTest")
+    t.options = dict(opts)
+    t.world_setup(seed)                          # pinned seeds: every red is reproducible
+    player = t.world.player
+    if expected_region is not None:
+        assert t.world._kept() == [expected_region], (
+            "%s no longer draws its acceptance region: %r" % (label, t.world._kept()))
+
+    cats = expand(opts["keep_out_of_shops"])
+    by_cat = {c: set(names_in([c], _PROGRESSIVE_NAMES)) for c in cats}
+
+    distribute_items_restrictive(t.multiworld)
+
+    # Read the post-progression decision, and read it AFTER the fill: `finalize_rules` now runs in
+    # `stage_fill_hook` (SPEC-fill-hook-migration-20260907), which is inside
+    # `distribute_items_restrictive`, not in `world_setup`'s pre_fill. Before #903 the option
+    # decided in set_rules and this test reconstructed that stale pre-fill grid, thereby agreeing
+    # with the bug instead of seeing it.
+    enforced = list(t.world._gf_keep_out_of_shops_enforced)
+    assert enforced, (
+        "%s: the gate armed NOTHING, so the check below is vacuous -- either this combo's shape "
+        "drifted or the gate is broken. Fix the combo or the gate, do not delete the case." % label)
+
+    armed = set(enforced)
+    # THE ORACLE IS THE BAN SET, NOT `category_of`. `category_of` answers `progressive` for every
+    # name outside ITEM_CATALOG -- the region Locks and the `Rune` sentinel -- which the feature
+    # deliberately leaves OUTSIDE the ban, because forbidding them from all 562 shop rows is a
+    # guaranteed FillError on a solo seed (keep_out_of_shops's docstring; pinned by
+    # test_gf_keep_out_of_shops.test_region_locks_and_the_rune_sentinel_are_not_forbidden).
+    # Asking `category_of` here asserted the OPPOSITE of the design, and stayed green only while
+    # fill happened not to route a Lock onto a shop row.
+    banned = set().union(*(by_cat[c] for c in armed))
+    offenders = [l for l in t.multiworld.get_locations(player)
+                 if getattr(l, "address", None) is not None
+                 and str(l.address) in SHOP_ROW_FLAGS
+                 and l.item is not None and l.item.player == player
+                 and l.item.name in banned]
+    # WITNESS: the enforced categories still exist in the seed, out in the world. Without this the
+    # assertion below would pass just as happily on a pool that never held one of those items.
+    displaced = sum(1 for l in t.multiworld.get_locations(player)
+                    if getattr(l, "address", None) is not None
+                    and str(l.address) not in SHOP_ROW_FLAGS
+                    and l.item is not None and l.item.player == player
+                    and l.item.name in banned)
+    assert displaced > 0, (
+        "%s: no item of an enforced category (%s) is anywhere in the seed post-fill -- the option "
+        "would 'pass' by the pool being empty rather than by the ban working"
+        % (label, ", ".join(enforced)))
+    assert not offenders, (
+        "%s: %d own item(s) in an ENFORCED category landed on a shop check (first: %s -> %s)"
+        % (label, len(offenders), offenders[0].name, offenders[0].item.name))
+
+
+def test_the_scaling_TELEMETRY_reports_the_resolved_ceiling_not_the_raw_sentinel():
+    """The telemetry line is MACHINE-READ, and nothing was asserting on it.
+
+    `tools/fill_regression.py::_SCALING_RE` parses this exact line and it is the suite's only
+    scaling measurement -- `flat_runs` drives the "ðŸ›‘ a FLAT run means the curve did nothing" alarm.
+    So a wrong ceiling here is not a cosmetic log defect: it makes the harness cry wolf on every
+    default-curve run (ER-fill-12 is literally the default-curve fixture), and a gate that cries
+    wolf is a gate people stop reading.
+
+    THE BUG THIS PINS. `maximum_enemy_difficulty` defaults to `auto` == -1. `ceiling_multiplier`
+    clamps its argument to 0..100, so the raw sentinel resolved to the BOTTOM rung and every default
+    seed logged `(floor 0, ceiling 0), tiers 0..0`. Live from 55bafb2 (2026-07-30, the auto default)
+    until this test.
+
+    WHY THE EXISTING COVERAGE COULD NOT SEE IT. test_a_default_all_regions_seed_spans_the_WHOLE_
+    ladder computes its tiers straight off REGION_SPHERE_TARGET_RANGES with no floor/ceiling clamp
+    -- it never calls ceiling_multiplier at all. The clamp is applied in exactly one place, the
+    telemetry, which is the one place that read the raw option. The suite was green throughout.
+    """
+    import logging
+    import re
+
+    from worlds.eldenring import scaling_ladder
+    from worlds.eldenring.features.scaling import resolved_max_difficulty
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 5}          # a SHORT seed: auto resolves well below the top rung,
+                                              # so a raw-vs-resolved mistake cannot hide behind 100%
+
+    records = []
+
+    class _Grab(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    lg = logging.getLogger("Greenfield")
+    h = _Grab()
+    lg.addHandler(h)
+    prev = lg.level
+    lg.setLevel(logging.INFO)
+    t = _T()
+    t.setUp()
+    try:
+        t.world.fill_slot_data()
+        expected_pct = resolved_max_difficulty(t.world)
+    finally:
+        t.tearDown()
+        lg.removeHandler(h)
+        lg.setLevel(prev)
+
+    line = next((m for m in records if "enemy scaling:" in m), None)
+    assert line is not None, "no enemy-scaling telemetry emitted at all -- fill_regression would " \
+                             "report NOT MEASURED and the sweep would silently stop covering this"
+
+    # The SAME shape tools/fill_regression.py::_SCALING_RE expects. If this stops matching, the
+    # harness degrades to NOT MEASURED without failing, so pin the format here too.
+    m = re.search(r"enemy scaling: (\d+) buckets, tiers (\d+)\.\.(\d+) of (\d+) "
+                  r"\(floor (\d+), ceiling (\d+)\), (\d+) at ceiling, median (\d+); ramp (\d+)", line)
+    assert m, f"telemetry no longer matches fill_regression's parser: {line!r}"
+
+    ceiling = int(m.group(6))
+    want = scaling_ladder.tier_for_ceiling_multiplier(
+        scaling_ladder.ceiling_multiplier(expected_pct))
+    assert ceiling == want, (
+        f"telemetry reported ceiling {ceiling}, expected {want} for a resolved "
+        f"maximum_enemy_difficulty of {expected_pct}%. A ceiling of 0 here is the raw `auto` "
+        f"sentinel (-1) reaching ceiling_multiplier, which clamps it to the bottom rung.")
+    assert ceiling > 0, (
+        "ceiling resolved to the bottom rung on a DEFAULT seed -- every region clamps to tier 0 and "
+        "the line reports a flat curve that the player is not actually getting.")
+
+    tier_hi = int(m.group(3))
+    assert tier_hi > 0, f"reported tiers {m.group(2)}..{m.group(3)} -- a flat curve on a default seed"
+
+
+# ---- global_scadutree_blessing x seed shape -----------------------------------------------------
+# ADDED 2026-08-01 with features/scadu_supply. This option was NOT in the matrix -- 40 tests here and
+# not one touched it -- which is how its injection half shipped missing for a month (#260). The
+# combination that matters is mode x DLC: the fragment is a DLC good, so mode-on + DLC-off must
+# degrade to a stated no-op rather than leak a DLC item into a base pool or raise.
+_SCADU_MODES = (0, 1, 2)
+_SCADU_SHAPES = (
+    ("rolled_default_dlc", {"num_regions": 6, "enable_dlc": True}),
+    ("all_regions_dlc", {"enable_dlc": True}),
+    ("dlc_off", {"enable_dlc": False}),
+    ("one_region_dlc", {"num_regions": 1, "enable_dlc": True, "ending_condition": "great_runes"}),
+)
+
+
+@pytest.mark.parametrize("mode", _SCADU_MODES)
+@pytest.mark.parametrize("label,extra", _SCADU_SHAPES, ids=[c[0] for c in _SCADU_SHAPES])
+def test_scadutree_blessing_combinations_generate_clean(mode, label, extra):
+    """Every mode x seed-shape gens clean, stays count-neutral, and -- when the fragment is
+    obtainable -- carries enough fragments to reach the injection target, OR (a one-region seed,
+    possible since SPEC-ashen-capital-lock) is clamped by MAX_POOL_SHARE: tight against the share
+    ceiling, never below the original cap of 12, and WARNED in the generation log. Which arm a
+    one_region_dlc run lands in depends on the rolled region (16 of 30 draws clamp); the
+    deterministic all-draws version of the clamped arm is
+    test_gf_scadu_supply.py::test_every_one_region_draw_clears_the_original_cap_under_the_clamp."""
+    from worlds.eldenring.features import scadu_supply as ss
+    try:
+        from ._util import world_items
+    except ImportError:  # direct/unittest fallback
+        from _util import world_items
+
+    class _T(WorldTestBase):
+        game = GAME
+        auto_construct = False
+        # This matrix measures Scadutree supply, including deliberately tiny one-region pools.
+        # Keep the unrelated missable-location capacity guard from rejecting those fixtures first.
+        # Exercise the live split options directly. Legacy value 0 is indistinguishable from an
+        # omitted value, so after v0.6 changed the live scope default to anywhere it can no longer
+        # express mode 0 in a generated options object; `scadutree_blessing_scope: dlc_only` can.
+        options = dict(
+            extra,
+            scadutree_blessing_scope="dlc_only" if mode == 0 else "anywhere",
+            dlc_blessing_catchup=mode == 2,
+            protect_missable_locations="off",
+        )
+
+    # Log capture BEFORE setUp: generation happens inside it, and the clamped-injection arm below
+    # must see the WARNING scadu_supply emits while the pool is being built.
+    import logging
+    records = []
+
+    class _Grab(logging.Handler):
+        def emit(self, record):
+            records.append(record.getMessage())
+
+    lg = logging.getLogger("Greenfield")
+    h = _Grab()
+    lg.addHandler(h)
+    t = _T()
+    t.setUp()
+    # Fixed seed 1 keeps the one-region DLC arm on Abyssal, whose two natural fragment units
+    # reproduce the tight-tail regression: injection used to trim those units after plan() had
+    # already subtracted them. A random draw made main alternate red/green without changing code.
+    t.world_setup(seed=1)
+    try:
+        m, target, natural, want, injected = ss.plan(t.world)
+        assert m == mode
+        # ðŸ›‘ UNITS, NOT ITEMS. Half the injected supply now arrives as `Scadutree Fragment x2`
+        # (one pool item, two fragments, itemCounts = 2), so counting name matches under-reads the
+        # supply by the size of the stacked half -- which is exactly how this assertion failed when
+        # the stack landed: 50 units of supply read as 28 items and looked like a shortfall.
+        frags = sum(2 if i.name == ss.FRAGMENT_X2 else 1 for i in world_items(t)
+                    if i.name in (ss.FRAGMENT, ss.FRAGMENT_X2))
+        if mode == 0:
+            assert injected == 0, f"{label}: mode off must inject nothing, got {injected}"
+        elif not extra.get("enable_dlc", False):
+            # DLC off: the fragment is excluded, so the honest answer is zero -- never a leak.
+            assert injected == 0 and frags == 0, (
+                f"{label}: DLC is off, so no Scadutree Fragment may enter the pool "
+                f"(injected={injected}, in pool={frags})")
+        else:
+            # The pool must carry exactly what the plan says: natural copies survive as themselves
+            # (COLLECTATHON protection) and every injected unit arrives, as an x1 or half an x2.
+            assert frags == natural + injected, (
+                f"{label} mode {mode}: plan says {natural} natural + {injected} injected but the "
+                f"pool carries {frags} unit(s) -- create_items and plan() disagree")
+            if injected == want:
+                assert frags >= ss.SCADU_CUM[target], (
+                    f"{label} mode {mode}: target {target} needs {ss.SCADU_CUM[target]} fragment "
+                    f"unit(s), pool has {frags} ({natural} natural + {injected} injected)")
+            else:
+                # THE DESIGNED DEGRADE (ruled 2026-08-06). Until SPEC-ashen-capital-lock removed
+                # the `auto` force-keep of GOAL_REGION, `num_regions: 1` could not produce a
+                # one-region seed (the closure floor was 3 regions / 727+ locations), so the
+                # unconditional assert above was really "the clamp never binds" -- a fact about
+                # the old world, not about this feature. On a genuinely one-region seed (240-360
+                # locations) 50 units do not fit MAX_POOL_SHARE and the clamp wins, exactly as
+                # its own comment always said. That is legal ONLY as stated-and-bounded:
+                assert injected < want  # this arm IS the clamp; anything else fails above
+                from worlds.eldenring.tables.data import HUB
+                kept = list(t.world._kept())
+                total = (len(t.world._seed_locations(HUB))
+                         + sum(len(t.world._seed_locations(r)) for r in kept)
+                         + len(getattr(t.world, "gf_extra_locations", ())))
+                ceiling = int(total * ss.MAX_POOL_SHARE)
+                # 1) TIGHT: the shortfall is explained by a NAMED bound, not drift. Either the
+                #    share ceiling stopped it (one more unit would not fit), or the
+                #    CLAMP_FLOOR_LEVEL floor overrode the ceiling (2026-08-25, #1013): the
+                #    injection then sits ABOVE the share, bounded at floor units -- legal only
+                #    because the floor is the original cap, never the target.
+                floor_want = max(0, ss.SCADU_CUM[ss.CLAMP_FLOOR_LEVEL] - natural)
+                tight = ss.items_for_units(injected) <= ceiling < ss.items_for_units(injected + 1)
+                floored = (injected == floor_want
+                           and natural + injected >= ss.SCADU_CUM[ss.CLAMP_FLOOR_LEVEL])
+                assert tight or floored, (
+                    f"{label} mode {mode}: injection stopped at {injected} unit(s) but the share "
+                    f"ceiling is {ceiling} item(s) of {total} locations and the floor wants "
+                    f"{floor_want} -- neither bound explains the stop, so this shortfall is a "
+                    f"defect, not the designed degrade")
+                # 2) FLOORED: never below the ORIGINAL cap (12, the pre-2026-08-06 target).
+                assert frags >= ss.SCADU_CUM[ss.CLAMP_FLOOR_LEVEL], (
+                    f"{label} mode {mode}: clamped pool carries {frags} unit(s), below "
+                    f"SCADU_CUM[{ss.CLAMP_FLOOR_LEVEL}] = {ss.SCADU_CUM[ss.CLAMP_FLOOR_LEVEL]} "
+                    f"-- the blessing is starved below the original cap")
+                # 3) STATED: the degrade warned. A silent shortfall is the headline gate's
+                #    "silent no-op", whatever the numbers say.
+                assert any("cannot reach its target" in r for r in records), (
+                    f"{label} mode {mode}: injection was clamped short of the target but no "
+                    f"warning reached the Greenfield log -- a silent degrade")
+        # Count-neutrality. `world_items` counts everything this world CREATED, including the
+        # PRECOLLECTED region-lock anchor, which occupies no location -- so the invariant is
+        # items == locations + precollected, not items == locations. Measured delta is exactly 1
+        # (the anchor) at every mode and seed shape; asserting the raw equality fails at mode 0,
+        # where this feature does nothing, which is how this assertion was caught being wrong.
+        pre = len(t.multiworld.precollected_items[t.player])
+        assert len(world_items(t)) == len(t.multiworld.get_locations(t.player)) + pre, (
+            f"{label} mode {mode}: pool is not count-neutral "
+            f"(items {len(world_items(t))}, locations {len(t.multiworld.get_locations(t.player))}, "
+            f"precollected {pre})")
+    finally:
+        t.tearDown()
+        lg.removeHandler(h)
+
+
+# ---------------------------------------------------------------------------------------------
+# auto_equip -- the combination sweep for "use what you get" (added 2026-08-02).
+#
+# CONTRIBUTING's headline gate and the landing checklist: a new option must gen cleanly in
+# combination with the ones it can interact with. auto_equip moves no item, gates nothing and
+# creates no region, so what it can actually interact with is the SLOT_DATA SHAPE around it -- and
+# there it has one real neighbour: `requiresClientFeatures`, which features/scaling.py also emits
+# when the difficulty ceiling is capped. That pair used to be a generation CRASH (two features, one
+# slot_data key, registry.merge_slot_data raising on the duplicate), so it is the combination worth
+# sweeping rather than a re-run of "does the world still build".
+#
+# The single-option assertions live in test_gf_auto_equip.py; this is the matrix, not a third copy.
+# ---------------------------------------------------------------------------------------------
+_AUTO_EQUIP_COMBOS = (
+    ("off_default",       {}),
+    ("on_all_regions",    {"auto_equip": True}),
+    ("on_one_region",     {"auto_equip": True, "num_regions": 1, "ending_condition": "great_runes"}),
+    # The seed shape that already emits requiresClientFeatures for its OWN reason. Both on -> the
+    # union; only the ceiling on -> auto_equip must be absent from the list, not just falsey.
+    ("on_with_ceiling",   {"auto_equip": True, "maximum_enemy_difficulty": 50}),
+    ("off_with_ceiling",  {"maximum_enemy_difficulty": 50}),
+    ("on_dlc",            {"auto_equip": True, "enable_dlc": True}),
+    # Everything else the client does to a RECEIVED weapon, on at the same time. These three are
+    # independent client passes over the same item (upgrade level, stat requirements, equip), and
+    # "they are independent" is a claim worth a seed rather than an argument.
+    ("on_with_the_other_received_item_knobs",
+     {"auto_equip": True, "auto_upgrade": True, "no_weapon_requirements": True}),
+)
+
+
+@pytest.mark.parametrize("label,extra", _AUTO_EQUIP_COMBOS, ids=[c[0] for c in _AUTO_EQUIP_COMBOS])
+def test_auto_equip_combinations_generate_clean(label, extra):
+    from worlds.eldenring import contract
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = dict(extra)
+
+    t = _T()
+    t.setUp()
+    try:
+        sd = t.world.fill_slot_data()
+    finally:
+        t.tearDown()
+
+    want_on = bool(extra.get("auto_equip", False))
+    assert "auto_equip" in sd["options"], (
+        "%s: options.auto_equip is absent. It is emitted unconditionally by core._options_echo, so "
+        "an absence is the echo having been dropped -- and the client would read the feature as "
+        "off with nothing anywhere saying so." % label)
+    assert bool(sd["options"]["auto_equip"]) is want_on, (
+        "%s: options.auto_equip is %r, expected %s" % (label, sd["options"]["auto_equip"], want_on))
+
+    required = sd.get(contract.REQUIRES_CLIENT_FEATURES, [])
+    assert ("auto_equip" in required) is want_on, (
+        "%s: requiresClientFeatures is %r. The tag must appear exactly when the option is on: "
+        "missing when on = an old client silently ignores the setting; present when off = every "
+        "old client is refused a seed that does not need the feature." % (label, required))
+    if extra.get("maximum_enemy_difficulty") is not None:
+        assert "scaling_ceiling" in required, (
+            "%s: the scaling ceiling's own tag was lost from %r -- a union that drops a "
+            "contributor is worse than the collision it replaced." % (label, required))
+    assert required == sorted(required), (
+        "%s: requiresClientFeatures %r is not sorted; the wire would depend on feature import "
+        "order rather than on the options." % (label, required))
+
+
+@pytest.mark.parametrize("seed", [1437, 1438])
+@pytest.mark.parametrize("dlc", [False, True])
+def test_mfg_recovered_pickups_follow_dlc_scope(dlc, seed):
+    """New physical checks obey DLC scope and remain count-neutral (#1437)."""
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 0, "enable_dlc": dlc}
+
+    t = _T()
+    t.world_setup(seed)
+    try:
+        locations = t.multiworld.get_locations(t.player)
+        recovered = {7774626, 7774627, 7774628, 7774629, 7774630}
+        present = {loc.address for loc in locations} & recovered
+        assert present == (recovered if dlc else set())
+        # Both Caelid scarabs remain in base-game scope; the other five are DLC.
+        addresses = {loc.address for loc in locations}
+        assert {7774633, 7774634, 7774640} <= addresses
+        dlc_stones = {7774632, 7774635, 7774636, 7774637, 7774638}
+        assert addresses & dlc_stones == (dlc_stones if dlc else set())
+        from ._util import world_pool_items
+        assert len(world_pool_items(t)) == len(locations)
+    finally:
+        del locations
+        t.tearDown()
+
+
+@pytest.mark.parametrize("seed", [601, 602, 603])
+@pytest.mark.parametrize("extra", [
+    {}, {"enable_dlc_gear": True},
+    {"enable_dlc_gear": True, "enable_dlc": True},
+    {"enable_dlc_gear": True, "dlc_only": True},
+    {"enable_dlc_gear": True, "vanilla_pool": True},
+])
+def test_dlc_gear_can_be_mixed_without_enabling_dlc_regions(extra, seed):
+    from worlds.eldenring import item_categories
+    from worlds.eldenring.core import DLC_ITEM_NAMES
+    from worlds.eldenring.features.pool_builder import juice_order_for_floor
+    from ._util import world_pool_items
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 6, "enable_dlc": False, **extra}
+
+    t = _T()
+    t.world_setup(seed)
+    pool = None
+    try:
+        w = t.world
+        gear_categories = {"weapons", "armor", "talismans", "ashes", "spells",
+                           "spirit_ashes", "crystal_tears"}
+        gear = {name for name in DLC_ITEM_NAMES
+                if item_categories.category_of(name) in gear_categories}
+        assert gear, "real DLC equipment is needed to witness this option"
+        if not w.gf_dlc_on:
+            assert not any(region in w.gf_eligible for region in
+                           ("Land of Shadow", "Belurat", "Scadu Altus", "Shadow Keep"))
+            assert (set(DLC_ITEM_NAMES) - gear) <= w.gf_dlc_excluded
+            if extra.get("enable_dlc_gear"):
+                assert not (gear & w.gf_dlc_excluded)
+                # The normal reward builder actually has DLC candidates to draw from.
+                assert gear & set(juice_order_for_floor(0))
+            else:
+                assert set(DLC_ITEM_NAMES) <= w.gf_dlc_excluded
+        else:
+            assert not (set(DLC_ITEM_NAMES) & w.gf_dlc_excluded)
+        pool = world_pool_items(t)
+        assert not ({item.name for item in pool} & w.gf_dlc_excluded)
+        if extra.get("enable_dlc_gear") and not extra.get("vanilla_pool"):
+            assert gear & {item.name for item in pool}, "the seeded pool should contain DLC gear"
+        assert len(pool) == len(t.multiworld.get_locations(t.player))
+    finally:
+        del w, pool
+        t.tearDown()
+
+
+@pytest.mark.parametrize("extra", [
+    {"enable_dlc": False},
+    {"enable_dlc": True},
+    {"dlc_only": True},
+    {"start_regions": 3},
+    {"start_region_pool": ["Caelid", "Ensis"]},
+    {"natural_progression": True},
+    {"vanilla_placement": "all"},
+])
+def test_uniform_start_region_combinations(extra):
+    from worlds.eldenring.region_spine import REGION_PARENT
+    from worlds.eldenring.features.start_grace import StartRegionSelection
+    assert StartRegionSelection.default == StartRegionSelection.option_weighted
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = dict(num_regions=6, start_region_selection="uniform", **extra)
+
+    t = _T()
+    try:
+        for seed in (1, 7, 22222):
+            t.world_setup(seed=seed)
+            starts = [i.name.removesuffix(" Lock") for i in t.multiworld.precollected_items[t.player]
+                      if i.name.endswith(" Lock")]
+            if extra.get("natural_progression") or extra.get("vanilla_placement"):
+                assert starts == []
+                continue
+            assert len(starts) == extra.get("start_regions", 1)
+            assert len(set(starts)) == len(starts)
+            assert set(starts) <= set(t.world._kept())
+            assert not set(starts) & set(REGION_PARENT)
+            assert not set(starts) & set(t.world.gf_goal_forced)
+            if "start_region_pool" in extra:
+                assert set(starts) <= set(extra["start_region_pool"])
+    finally:
+        t.tearDown()
+
+
+@pytest.mark.parametrize("seed", [1, 7, 22222])
+@pytest.mark.parametrize("cappy,sonic", [(True, False), (False, True), (True, True)])
+@pytest.mark.parametrize("extra", [
+    {"enable_dlc": False, "mario_fludd": True},
+    {"enable_dlc": True, "mario_stat_upgrades": True},
+    {"vanilla_pool": True, "enable_dlc": False, "mario_fludd": True, "mario_stat_upgrades": True},
+])
+def test_mario_addon_seeded_fill_combinations(extra, seed, cappy, sonic):
+    """Independent addons consume filler, including shared FLUDD/stat configurations."""
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.features.mario_mode import ADDONS
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 6, "mario_mode": True, "mario_cappy": cappy,
+                   "mario_sonic_movement": sonic, **extra}
+
+    t = _T()
+    t.world_setup(seed=seed)
+    items = None
+    try:
+        assert len(t.multiworld.itempool) == len(t.multiworld.get_unfilled_locations())
+        distribute_items_restrictive(t.multiworld)
+        assert not t.multiworld.get_unfilled_locations()
+        assert t.multiworld.can_beat_game()
+        sd = t.world.fill_slot_data()
+        items = [loc.item for loc in t.multiworld.get_locations(t.player) if loc.item]
+        for option, _label, families, feature in ADDONS:
+            enabled = cappy if option == "mario_cappy" else sonic
+            assert (feature in sd["requiresClientFeatures"]) == enabled
+            assert sd["options"].get(option, 0) == int(enabled)
+            for key, name, aid, count in families:
+                assert sum(item.name == name for item in items) == (count if enabled else 0)
+                assert (sd["abilityUnlockItems"].get(str(aid)) == key) == enabled
+    finally:
+        del items
+        t.tearDown()
+
+
+@pytest.mark.parametrize("addons", [False, True])
+def test_mario_addons_preserve_progression_equipment_rejection(addons):
+    """The existing natural-progression gear requirement is refused, never removed silently."""
+    from Options import OptionError
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 6, "mario_mode": True, "natural_progression": True,
+                   "mario_fludd": True, "mario_stat_upgrades": True,
+                   "mario_cappy": addons, "mario_sonic_movement": addons}
+
+    with pytest.raises(OptionError, match="mario_mode cannot replace progression equipment"):
+        _T().world_setup(seed=22222)
+
+
+@pytest.mark.parametrize("seed", [1, 7, 42, 22222, 99])
+@pytest.mark.parametrize("extra", [
+    {"enable_dlc": False}, {"dlc_only": True},
+    {"enable_dlc": True, "scadutree_blessing_scope": "dlc_only", "dlc_blessing_catchup": False},
+    {"item_shuffle": False, "progressive_flasks": False},
+])
+@pytest.mark.parametrize("bingo_graces", [False, True])
+def test_bingo_full_board_seeded_fill_combinations(seed, extra, bingo_graces):
+    from Fill import distribute_items_restrictive
+    from Options import OptionError
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"bingo_mode": True, "bingo_catalogue": "full", "bingo_graces": bingo_graces, **extra}
+    t = _T()
+    try:
+        t.world_setup(seed=seed)
+        distribute_items_restrictive(t.multiworld)
+        assert not t.multiworld.get_unfilled_locations()
+        assert t.multiworld.can_beat_game()
+        assert all(loc.address is None or not loc.item.advancement or loc.address in {c["location"] for c in t.world.gf_bingo_board}
+                   for loc in t.multiworld.get_locations(t.player) if loc.item)
+    finally:
+        t.tearDown()
+
+
+@pytest.mark.parametrize("seed", [1,7,42,22222,99])
+@pytest.mark.parametrize("extra", [{"enable_dlc": False},{"dlc_only": True},{"bingo_graces":True},
+    {"item_shuffle":False,"progressive_flasks":False}])
+def test_bingo_full_board_keeps_every_eligible_region(seed,extra):
+    from Fill import distribute_items_restrictive
+    class _T(WorldTestBase):
+        game=GAME
+        options={"bingo_mode":True,"bingo_catalogue":"full",**extra}
+    t=_T()
+    try:
+        t.world_setup(seed=seed)
+        assert set(t.world._kept()) == set(t.world.gf_eligible)
+        distribute_items_restrictive(t.multiworld)
+        assert not t.multiworld.get_unfilled_locations()
+        assert t.multiworld.can_beat_game()
+    finally: t.tearDown()
+
+
+@pytest.mark.parametrize("extra", [{}, {"enable_dlc": False}, {"dlc_only": True},
+    {"progressive_flasks": False}, {"scadutree_blessing_scope": "anywhere"}])
+def test_full_bingo_detectors_respect_configuration(extra):
+    from Fill import distribute_items_restrictive
+    # Exercise one upgrade supply at a time: the entire progression surface has
+    # only 25 slots, and multiple large upgrade demands can exceed that budget.
+    if extra.get("dlc_only") or extra.get("scadutree_blessing_scope") == "anywhere":
+        rows = [dict(label="Reach Scadutree Blessing 10", family="scadu", scope="dlc")]
+    else:
+        rows = [dict(label="Raise your flask to +7", family="flask", scope="base")]
+    scope = "dlc" if extra.get("dlc_only") else "base"
+    rows += [dict(label=f"Manual {i}", family=f"manual-{i}", scope=scope) for i in range(25-len(rows))]
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"bingo_mode": True, "bingo_catalogue": "full", "bingo_graces": True,
+            "bingo_manual_pool": rows, "scadutree_blessing_scope": "dlc_only",
+            "dlc_blessing_catchup": False, **extra}
+    t = _T()
+    try:
+        t.world_setup(seed=42)
+        assert {c["label"] for c in t.world.gf_bingo_board} == {r["label"] for r in rows}
+        for cell in t.world.gf_bingo_board:
+            assert cell["manual"]
+            if cell["label"] == "Raise your flask to +7":
+                if extra.get("progressive_flasks") is False:
+                    assert not cell.get("state")
+                else:
+                    assert cell["state"] == dict(metric="flask_potency", target=7)
+            if cell["label"] == "Reach Scadutree Blessing 10":
+                if extra.get("scadutree_blessing_scope") == "anywhere":
+                    assert not cell.get("state")
+                else:
+                    assert cell["state"] == dict(metric="scadutree", target=10)
+        distribute_items_restrictive(t.multiworld)
+        assert t.multiworld.can_beat_game()
+    finally:
+        t.tearDown()
+
+@pytest.mark.parametrize("seed", [1, 7, 22222])
+@pytest.mark.parametrize("bosses,extra", [
+    ([], {"enable_dlc": False}),
+    (["starscourge_radahn"], {"enable_dlc": False, "num_regions": 1}),
+    (["starscourge_radahn"], {"enable_dlc": True, "start_region_pool": ["Caelid"]}),
+    (["promised_consort_radahn"], {"enable_dlc": True, "num_regions": 1}),
+    (["starscourge_radahn", "promised_consort_radahn"], {"enable_dlc": True}),
+    (["starscourge_radahn"], {"enable_dlc": True, "goal": "promised_consort"}),
+    (["promised_consort_radahn"], {"dlc_only": True, "goal": "promised_consort"}),
+    (["starscourge_radahn"], {"natural_progression": True, "enable_dlc": False}),
+    (["starscourge_radahn"], {"vanilla_placement": "all", "enable_dlc": False}),
+])
+def test_required_bosses_fill_and_contract(bosses, extra, seed):
+    from Fill import distribute_items_restrictive
+    from worlds.eldenring.features.goal_locations import required_boss_specs, terminal_goal_ids
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 6, "goal": "elden_beast", "required_bosses": bosses, **extra}
+
+    t = _T()
+    t.world_setup(seed=seed)
+    try:
+        w = t.world
+        assert len(t.multiworld.itempool) == len(t.multiworld.get_unfilled_locations())
+        distribute_items_restrictive(t.multiworld)
+        assert not t.multiworld.get_unfilled_locations()
+        assert t.multiworld.can_beat_game()
+        sd = w.fill_slot_data()
+        specs = required_boss_specs(w)
+        assert sd["options"]["required_boss_flags"] == sorted({flag for _, _, flag in specs})
+        assert ("required_bosses_v1" in sd.get("requiresClientFeatures", [])) == bool(bosses)
+        # Extra goals must not disturb the client's primary-finale access calculation.
+        _, primary = terminal_goal_ids(w._kept(), w.gf_goal_choice,
+                                      finale_built=w.gf_finale_active, dlc_terminus=w.gf_dlc_terminus)
+        assert sd["goalLocations"] == sorted(primary)
+        addresses = {loc.address for loc in t.multiworld.get_locations(t.player)}
+        for region, ap, flag in specs:
+            assert region in w._kept() and ap in addresses
+        if "start_region_pool" in extra:
+            assert "Caelid Lock" in {i.name for i in t.multiworld.precollected_items[t.player]}
+    finally:
+        del w
+        t.tearDown()
+
+
+@pytest.mark.parametrize("boss,extra", [
+    ("promised_consort_radahn", {"enable_dlc": False}),
+    ("starscourge_radahn", {"dlc_only": True}),
+])
+def test_required_bosses_reject_ineligible_regions(boss, extra):
+    from Options import OptionError
+
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"required_bosses": [boss], **extra}
+
+    with pytest.raises(OptionError, match="Additional Required Bosses.*Enable DLC.*DLC Only"):
+        _T().world_setup(seed=1)
+
+
+def test_required_boss_defeats_match_generated_arena_triggers():
+    from worlds.eldenring.features.goal_locations import REQUIRED_BOSS_SPECS, LOCATIONS
+    from worlds.eldenring.tables.boss_sweeps import SWEEP_ARENA_REGION
+    expected_rewards = {"starscourge_radahn": 510300, "promised_consort_radahn": 510430}
+    for key, (region, ap, defeat) in REQUIRED_BOSS_SPECS.items():
+        assert SWEEP_ARENA_REGION[defeat] == region
+        assert [(aid, flag) for name, aid, flag in LOCATIONS[region] if aid == ap] == [
+            (ap, expected_rewards[key])]
+        assert defeat != expected_rewards[key], "shuffled acquisition is not a boss defeat"
+
+
+@pytest.mark.parametrize("seed", [1, 7, 22222])
+@pytest.mark.parametrize("shuffle", [False, True])
+def test_uncapped_trap_counts_generate_and_fill_without_pool_growth(seed, shuffle):
+    from Fill import distribute_items_restrictive
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 0, "enable_dlc": False, "item_shuffle": shuffle,
+                   "trap_count": 400, "traps": ["rune_thief"]}
+    t = _T()
+    try:
+        t.world_setup(seed=seed)
+        assert sum(i.name.startswith("Trap: ") for i in t.multiworld.get_items()) == 400
+        assert len(t.multiworld.itempool) == len(t.multiworld.get_unfilled_locations())
+        distribute_items_restrictive(t.multiworld)
+        assert t.multiworld.can_beat_game()
+    finally:
+        t.tearDown()
+
+
+def test_uncapped_trap_overflow_names_the_actual_seed_capacity_before_fill():
+    from Options import OptionError
+    class _T(WorldTestBase):
+        game = GAME
+        options = {"num_regions": 1, "enable_dlc": False, "trap_count": 10000,
+                   "traps": ["rune_thief"]}
+    with pytest.raises(OptionError, match="trap_count 10000.*Lower trap_count to"):
+        _T().world_setup(seed=42)

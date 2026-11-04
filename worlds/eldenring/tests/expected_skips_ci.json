@@ -1,0 +1,72 @@
+{
+  "comment": [
+    "THE SKIP CENSUS for the CI `tests` job (inert-test audit finding #3, 2026-08-04).",
+    "A green run cannot tell 'deliberately dev-box-only' from 'dark by accident' -- this file can.",
+    "tools/gf_test.py --skip-census asserts the observed skip inventory against these families:",
+    "every observed skip reason must regex-match exactly one family, and every family's count is",
+    "EXACT. A new skip family, a vanished one, or a count change all fail the job, so waking or",
+    "darkening a test is always a reviewed diff to this file, never an accident.",
+    "Counts were MEASURED in the CI-equivalent layout (upstream AP inside the repo checkout,",
+    "bundle ensured, client at the gitlink) on 2026-08-04 post-#244: 1555 passed, 77 skipped.",
+    "(The 2026-08-04 #244 fix woke grace_skip_oracle: its known-red family, 5 skips, is GONE --",
+    "the oracle now runs green in this job, plus two artifact-free Regression244 pins.)",
+    "The bucket story per suite lives in tools/gf_suite_ledger.py; this file pins the numbers.",
+    "If you make a skip go away on purpose: celebrate, then lower the count here in the same PR."
+  ],
+  "families": [
+    {
+      "family": "frozen-progressive-stonesword-keys",
+      "why": "self-expiring freeze, now HALF expired. progressive_stone_bells was UNFROZEN 2026-08-10 (issue #506) and its 16 cases WOKE -- the wake is the good news the old note asked us to celebrate. progressive_stonesword_keys is still frozen and keeps its own class skip and its own tripwire, so this family is now keys-only: 5 skips, no tripwire (the keys tripwire RUNS and passes while they are frozen). Counted off the CI run that woke them, not derived -- WorldTestBase generates inherited cases per subclass, so the number cannot be worked out from the source.",
+      "pattern": "^progressive_stonesword_keys is FROZEN OFF",
+      "count": 5
+    },
+    {
+      "family": "grace-region-dumps-windows-only",
+      "why": "test_gf_grace_region_correctness.py needs grace_region_map_*.tsv + grace_flags.tsv, Windows-side dumps NOT in the gen_inputs bundle. Dev-box coverage (run_ci.ps1).",
+      "pattern": "grace_region_map_\\*\\.tsv / grace_flags\\.tsv absent",
+      "count": 6
+    },
+    {
+      "family": "boss-arena-skip-list-documented-stub",
+      "why": "test_gf_grace_region_correctness.py's tracked no-independent-oracle stub -- a documented gap, kept visible on purpose.",
+      "pattern": "no independent boss-arena/fog grace source",
+      "count": 1
+    },
+    {
+      "family": "grace-flags-tsv-windows-only",
+      "why": "test_gf_grace_skip_classes.py gates all 12 tests on grace_flags.tsv (Windows dump, not bundled) even though event/ + BonfireWarpParam.csv are; splitting the suite is noted follow-up in tools/gf_suite_ledger.py.",
+      "pattern": "event/ decompiles, BonfireWarpParam\\.csv, grace_flags\\.tsv\\) absent",
+      "count": 12
+    },
+    {
+      "family": "region-id-map-windows-only",
+      "why": "test_gf_region_artifact_oracle.py needs REGION_ID_MAP.md + the grace dump TSVs; neither ships in the bundle. Dev-box coverage (run_ci.ps1).",
+      "pattern": "artifact map->region source absent",
+      "count": 2
+    },
+    {
+      "family": "recipe-reserves-no-somber-stones",
+      "why": "test_gf_filler_economy_floor.py: the shipped playtest recipe reserves no somber_stones, so the reservation assertion has nothing to hold -- content-dependent, not layout-dependent.",
+      "pattern": "playtest recipe reserves no somber_stones",
+      "count": 1
+    },
+    {
+      "family": "contract-versions-needs-tags",
+      "why": "test_gf_contract_versions.py derives the ledger history from `git tag` (2026-08-14, replacing a typed SHIPPED fixture). This job's checkout is SHALLOW -- fetch-tags is set on `generators` only, which is where these four actually run. They loud-skip here rather than iterating an empty derivation, which would pass vacuously and is the exact failure the derivation was meant to end. If this count reaches 0, either the tests job started fetching tags (good -- lower it deliberately) or the guard was deleted and the ratchet is now green over nothing.",
+      "pattern": "^no v\\* tags in this checkout",
+      "count": 4
+    },
+    {
+      "family": "sweep-anchor-tool-repo-only",
+      "why": "test_gf_sweep_anchor_coords is a GENERATORS suite (ledgered there) and gates tools/derive_sweep_anchor_coords.py, which the installed world does not carry -- so all 5 cases skip in THIS job and run in the generators job instead. The count is 5 and must move with the suite: a case added or retired there is a reviewed diff here.",
+      "pattern": "^repo-only tool not present \\(installed world\\)",
+      "count": 5
+    },
+    {
+      "family": "sweep-arena-splits-driven-to-zero",
+      "why": "test_gf_sweep_arena_reachability.py::EveryMismatchedGroup::test_the_split_groups_members_are_ordinary_reachable_checks. #1059 made a boss's arena region and its members' region agree at the SOURCE (gen_data refuses to emit a split), so the severity loop has nothing to iterate and loud-skips rather than passing vacuously. The emptiness itself is asserted by its sibling test_the_split_set_is_the_measured_one, which is why this is a deliberate skip and not a dark test. Ledgered 2026-08-26: it was UNLEDGERED from the moment #1059 merged and the census never said so, because main's union verdict was aborting on a red shard before this gate ran (an aborting gate hides every gate below it). If this count reaches 0 a split has COME BACK -- diagnose it, do not rebaseline.",
+      "pattern": "^no arena/members splits remain",
+      "count": 1
+    }
+  ]
+}

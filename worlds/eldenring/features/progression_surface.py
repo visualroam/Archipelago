@@ -1,0 +1,2067 @@
+"""progression_surface -- CONFINE this world's own progression to a small, high-confidence location
+set (v0.2; matt-style "important locations" restriction, not a soft weight).
+
+matt's standalone ER randomizer HARD-RESTRICTS key items to an "important locations" whitelist (major
+bosses always, plus opt-in golden-seed trees / sacred-tear churches / shops / other bosses); a separate
+"bias slider" only tunes difficulty WITHIN that set. The bedrock AP port only got the SOFT half (mark
+PRIORITY, advancement gets first crack -- features/curated_fill here). This feature adds the HARD half:
+it pulls this world's OWN progression out of the pool and places it, via Fill.fill_restrictive, ONTO the
+selected surface only -- default = MajorBoss (the ~24 boss_arena arena majors + the hand-picked
+MAJOR_BOSS_EXTRAS, tagged 'MajorBoss' in location_tags). Everything else lands normally.
+
+WHAT COUNTS AS "OUR PROGRESSION": EVERY advancement item this world owns -- Region Locks, required
+Great Runes, gate runes, quest keys, ability Unlocks, whatever a future feature mints. No
+type list (Alaric, 2026-10-06): the option is called PROGRESSION surface, and a hand-picked list of
+exemptions is how Roll and L1 ended up in colombius's shops under a Boss-only surface. Items still
+reach partner worlds as travelling progression under cross_game_progression (place_released_locks),
+so confining them does not kill a cross-game dependency. Anything the owner declared to
+`early_items` (Unlock: Roll, the forced early attack) goes on a surface check reachable from the
+start instead of through the ladder -- see place_early_on_surface.
+
+FEASIBILITY LADDER: a surface smaller than the number of locks to place -- or a seed
+with no sphere-0 anchor -- can't host every lock. So strict mode WIDENS the allowed surface one grouped
+rung at a time, highest-confidence first (MajorBoss -> +Remembrance,GreatRune -> +KeyItem -> +Boss ->
++Legendary -> +Seedtree,Church), then widens once to every enabled externally TRUSTED check regardless
+of tag. HOLD checks are never promoted and required items are never returned to unrestricted fill; a
+seed with no trusted matching refuses deterministically instead of weakening the invariant. (The
++Seedtree rung also unlocks the 2 Roundtable-Hold Golden Seeds, an always-reachable
+sphere-0 bootstrap, so a no-precollect seed can still seed the lock chain.)
+
+BASE-STATE FIX: reachability during the pre-fill is evaluated from mw.get_all_state(False) AFTER the
+restricted items are pulled -- so the rest of the pool (foreign advancement, ability Unlocks, any
+precollected region Lock) counts as available, and a check gated on one of them doesn't look falsely
+unreachable.
+Placed locks are collected (lock=True) so multiworld progression-balancing can't later move them off the
+surface. Runs from core.pre_fill; supersedes curated_fill when the mode is soft/strict.
+"""
+from Options import Choice, NamedRange, OptionError, OptionSet, Range, Removed, Visibility
+import hashlib
+
+from ..registry import Feature, register
+from .. import contract
+
+try:
+    from ..tables.location_tags import LOCATION_TAGS
+except Exception:  # not yet generated -> feature is a no-op
+    LOCATION_TAGS = {}
+
+
+# Grouped widen order for the feasibility ladder, HIGHEST-CONFIDENCE FIRST. Each group is ADDED to the
+# user's base surface in turn. The order is a confidence ranking: Remembrance/GreatRune are the same
+# named demigods' guaranteed drops (≈ MajorBoss certainty); KeyItem is a small, hand-reviewable set (~14)
+# so it comes BEFORE Legendary, which is a large scattered set (~84) nobody can vouch for from memory;
+# Boss (the fixed minor-boss arenas) sits between them; Seedtree/Church (the collectible markers) stay
+# last. Shop is intentionally NOT here: it would dump locks onto the hundreds of hub shop slots and
+# defeat the restriction -- Shop is only ever in play if the user explicitly selects it in the base.
+_WIDEN_GROUPS = [["Remembrance", "GreatRune"], ["KeyItem"], ["Boss"], ["Legendary"], ["Seedtree", "Church"]]
+_REGION_COMPLETION_FEATURE = "region_completion_goal_gate"
+
+
+class ProgressionSurface(OptionSet):
+    """Which kinds of check may hold progression items.
+
+    Fewer kinds = a tighter hunt; more = wider scatter. A list too small for your
+    progression widens itself; it stops generation only if every safe check is too few.
+    All progression lands here; Roll on an early one. Empty = no limit, except unsafe
+    checks (missable ones and similar). Incoming Progression Confinement controls
+    foreign progression.
+    Default: MajorBoss (major boss drops, incl. Remembrance and GreatRune), KeyItem (quest
+    keys), Church (Sacred Tears), Seedtree (Golden Seeds), Fragment, Revered (DLC pickups),
+    ShopSlot (one ware per merchant), SweepSlot (some checks per boss sweep; none if Dungeon
+    Sweep is none).
+    Optional: Basin (Crystal Tears), Legendary (rarest items), Boss (every boss drop, incl.
+    FieldBoss, MinorDungeonBoss), Shop, ShopNonSpell (merchant wares; farm runes, buy your
+    progression).
+    """
+    display_name = "Progression Surface (where progression can land)"
+    # The v0.2 default. This was three classes (33 locations) for one reason: the location DATA could
+    # not be trusted, so it was held to what a human could hand-verify. The provenance work (MSB/EMEVD
+    # ground truth, the region oracle, the phantom-flag guard) removed that constraint, and the category
+    # tags are now derived from what each flag's ItemLotParam lot actually GRANTS -- audited against
+    # ground truth: Sacred Tear 13/13, Golden Seed 43/43, Scadutree Fragment 46/46, Revered 23/23.
+    # Single-sourced in contract.py: the AP-free tracker generator needs this same selection and
+    # cannot import an AP OptionSet. See contract.SURFACE_DEFAULT_CLASSES.
+    default = contract.SURFACE_DEFAULT_CLASSES
+    valid_keys = frozenset(contract.SURFACE_CLASSES)
+
+    @classmethod
+    def from_any(cls, data):
+        # "LegacyBoss" was absorbed into MajorBoss (2026-08-20). The spelling stays accepted so no
+        # yaml in the wild breaks -- same shape as the limgrave_caves region alias. Normalized
+        # BEFORE validation, so verify_keys never sees the retired name.
+        if isinstance(data, (list, set, frozenset, tuple)):
+            data = ["MajorBoss" if x == "LegacyBoss" else x for x in data]
+        return super().from_any(data)
+
+    @staticmethod
+    def wizard_key_meta():
+        """Per-key presentation for the options wizard. Read by tools/dump_options_metadata.py.
+
+        A GENERIC hook (`wizard_key_meta` on any option class), so the dumper never learns this
+        option's name and the next set-valued option cannot grow a second, divergent way of doing
+        the same thing. `valid_keys` is untouched and stays the authoritative sorted list -- this is
+        additive, and a renderer that ignores it still works.
+
+        `contains` is DERIVED from LOCATION_TAGS on every dump, not carried here. The wizard draws
+        it to say "you already have these" -- and the one time this lattice was written down by hand
+        (a comment in contract.py) it sat INVERTED for months.
+        """
+        default = contract.SURFACE_DEFAULT_CLASSES
+        return {
+            "keys": surface_class_meta(),
+            "families": [{"id": fid, "label": lab} for fid, lab, _ in SURFACE_CLASS_FAMILIES],
+            "contains": class_containment(),
+            "presets": [
+                {"label": "Recommended", "keys": sorted(default)},
+                {"label": "Major bosses only", "keys": ["MajorBoss"]},
+                {"label": "No sweep payouts", "keys": sorted(default - {"SweepSlot"})},
+                {"label": "Buy your progression", "keys": sorted(default | {"ShopNonSpell"})},
+                {"label": "Off", "keys": []},
+            ],
+        }
+
+
+class GoalRegionUnlockPolicy(Choice):
+    """Whether finishing also needs your seed's other regions unlocked or cleared.
+
+    regions_completed needs an up-to-date client. items_held does nothing under Natural
+    Progression or Vanilla Placement. none needs the great_runes Ending Condition.
+    none: no region requirement (default)
+    items_held: hold every Region Lock (the item that opens a region)
+    regions_completed: check off every Progression Surface check in each region
+    """
+    display_name = "Regions Needed to Finish"
+    option_items_held = 0
+    option_regions_completed = 1
+    option_none = 2
+    default = 2
+
+
+class ProgressionSurfaceMode(Removed):
+    """Retired 2026-08-14. It had been frozen at `strict` since the v0.2 slim-down, so `off` and
+    `soft` were unreachable from any yaml -- and both branches were still carried in four places
+    here plus three in core, which is how #635 happened (a live docstring citing "when Progression
+    Surface Mode is off", a state no seed could be in).
+
+    Strict is now the only regime and is written as such rather than selected. What you probably
+    want instead: `progression_surface` chooses WHICH classes may hold progression, and
+    `confine_foreign_progression` decides whether other players' progression is held to it too.
+
+    🛑 This is not a Frozen option turned Removed by paperwork -- the off-branches were DELETED. A
+    build where the option is merely absent behaves as `off`, which silently disarms the surface and
+    ships an empty progressionSurfaceLocations to a client that reads it."""
+
+
+class ProgressionSharing(Choice):
+    """How progression travels between your world and other players.
+
+    balanced (default): your Region Locks can travel. Incoming progression uses the
+    advanced Incoming Progression Confinement setting (100: surface only by default).
+    open: Locks and runes stay in Elden Ring worlds; incoming progression uses any safe
+    check. Use this if a partner game cannot take early Elden Ring progression.
+    """
+    display_name = "Progression Sharing (with other players)"
+    option_balanced = 0
+    option_open = 1
+    default = 0
+
+
+# Why ONE option (Alaric 2026-09-18: "i'm having trouble tracking what's going on"). Three knobs
+# answered one question -- where does progression go -- and the useful combinations were two:
+# `progression_bias` (0), `cross_game_progression` (auto) and `confine_foreign_progression` (100)
+# at their shipped values is `balanced`; `cross_game_progression: never` +
+# `confine_foreign_progression: 0` is `open`. The three still exist and are accepted in YAML.
+# Incoming confinement is now an advanced control; the two outbound knobs stay hidden.
+# `open` overrides cross-game progression and incoming confinement in
+# `apply_progression_sharing`; `balanced` leaves them exactly as written. `progression_bias`
+# is never overridden -- neither mode has an opinion about how many of your own Locks stay home.
+
+
+def apply_progression_sharing(options) -> None:
+    """Resolve `progression_sharing` onto cross-game progression and incoming confinement. Called
+    in generate_early, so every reader (item_rule install, incoming reservation, pre_fill) sees
+    the resolved values."""
+    mode = getattr(options, "progression_sharing", None)
+    if mode is None or int(mode.value) != ProgressionSharing.option_open:
+        return
+    options.cross_game_progression.value = 0
+    options.confine_foreign_progression.value = 0
+
+
+class ProgressionBias(Range):
+    """How hard your Region Locks are pulled toward YOUR OWN world. 0 (default) is no pull at all --
+    every Lock is an ordinary multiworld item and can end up in another player's game, so you may
+    well be waiting on somebody else to find your way into Liurnia. That is Archipelago working as
+    intended, and it is the default on purpose. 100 pins every Lock at home.
+
+    It is a share, not a mood: at 40, about 40% of your Locks are reserved for your own Progression
+    Surface and the other 60% go into the multiworld pool.
+
+    🛑 A LOCK IN THE POOL IS STILL CURATED. It is held to the same Progression Surface every other
+    player's progression is held to -- it just lands on SOMEBODY'S boss or remembrance rather than
+    necessarily yours. Lowering this trades away where your keys are, not whether they sit on
+    checks worth finding. The knob that trades the curation itself is Confine Foreign Progression,
+    and it is deliberately a separate one.
+
+    MEASURED at 0, over 740 generations: in a two-slot Elden Ring multiworld about 45% of Locks
+    leave their own world and ~90% of all placed Locks sit on a surface check; four slots pushes
+    travel to 60-70%. That says how many leave, not WHICH other world receives them: ordinary fill
+    follows the available locations, so a smaller non-Elden-Ring partner may receive none at all.
+    `cross_game_progression` is the separate share that deliberately sends travelling Locks to
+    non-Elden-Ring worlds.
+
+    At a table where every player runs Elden Ring, the same share applies to your Great Runes and
+    keys: at 0 they can be found in another player's Elden Ring world too, at 100 they stay home.
+
+    No effect in a solo seed (there is nowhere else for a Lock to go), nor in the modes that mint no
+    Lock items at all (natural progression, vanilla placement)."""
+    display_name = "Progression Bias"
+    visibility = Visibility.none  # governed by `progression_sharing`; still accepted in a yaml
+    range_start = 0
+    range_end = 100
+    default = 0
+
+
+class CrossGameProgression(NamedRange):
+    """How your progression is shared with the other games at the table.
+
+    ``auto`` (the default) balances it: every other game receives its own near **1 / number of
+    games** share of your travelling progression, and your world reserves the same share of every
+    partner game's progression in return. Eleven items at a three-game table means roughly four to
+    each partner and three staying home -- not one aggregate batch split however fill happens to
+    land. Two slots of one game count as a single game, sampled fairly across their players, and
+    items a player keeps local are never taken.
+
+    ``aggregate`` is the older shape: one combined foreign batch sized at 1/N, divided between the
+    partners by ordinary fill, with no incoming reservation. A number from 1 to 100 is that
+    aggregate share set by hand. ``never`` (0) keeps every travelling progression item inside
+    Elden Ring -- the escape hatch if a partner game will not tolerate being filled and a seed
+    refuses to generate.
+
+    Shares are capacity-aware: a partner game with fewer open locations than its share, or a world
+    without room for the full incoming reservation, caps the share at what fits, and the
+    generation log states requested-versus-reserved per game. Only a placement the rules refuse
+    outright is a failure.
+
+    No effect in a solo seed, in an all-Elden-Ring multiworld, or in the modes that mint no Lock
+    items."""
+    display_name = "Cross Game Progression"
+    visibility = Visibility.none  # governed by `progression_sharing`; still accepted in a yaml
+    range_start = 0
+    range_end = 100
+    default = -1
+    special_range_names = {"auto": -1, "aggregate": -2, "never": 0}
+
+
+# Why CrossGameProgression exists at all (measured 2026-08; kept beside the class per the #402
+# rule -- rationale is a comment, the docstring is the player's):
+# `progression_bias` already releases Locks into the multiworld, and between Elden Ring worlds it
+# works -- MEASURED 50-54% travel on 2xER seeds. But `place_released_locks` only ever offered them
+# ELDEN RING surfaces (~170 checks against at most ~36 Locks), so the spill valve that was supposed
+# to feed a partner never had anything to spill: 0 Locks reached a Hollow Knight slot across four
+# measured configurations, including a 2xER+1xHK seed where 15 of 28 Locks travelled -- all to the
+# other ER world. `progression_bias` decides whether Locks leave their owner; this option chooses
+# between ER slots and non-ER partners. It PLACES INTO ANOTHER GAME'S LOCATIONS, which the old pass
+# refused for a reason (TUNIC's stage_pre_fill raises on foreign pre-fill placements); we only offer
+# EMPTY locations, never force, and put back anything unplaced -- `never` is the escape hatch.
+# `balanced` became auto's meaning in v0.4.10 (#927/#929): the per-game 1/N shape replaced the
+# aggregate batch after the motivating seed split 11 progression items 2/2/7. The separate
+# `balance_progression_across_games` toggle from #929's draft was FOLDED INTO auto before ever
+# shipping (Alaric 2026-08-20) -- one lever, three regimes, no interaction matrix.
+
+
+class ConfineForeignProgression(NamedRange):
+    """Share of incoming progression names confined to your Progression Surface.
+
+    100: surface only (default). 0: any safe check. Intermediate values apply per item name.
+    Your own progression and outgoing Locks are unchanged. No effect in solo play.
+    Progression Sharing open forces 0; Multiworld Scope surface forces 100.
+    An empty surface disables confinement.
+    """
+    display_name = "Incoming Progression Confinement"
+    wizard_range_labels = {0: "Any safe check", 100: "Surface only"}
+    wizard_range_unit = "%"
+    visibility = Visibility.all & ~Visibility.simple_ui
+    range_start = 0
+    range_end = 100
+    default = 100
+    # 🛑🛑 `on` / `off` USED TO BE HERE AND MUST NEVER COME BACK, and this is not a style note --
+    # their presence made the world's own generated template UNLOADABLE. AP's template generator
+    # (`Options.generate_yaml_templates` -> `data/options.yaml`, the `range_option` macro) emits
+    # weight keys UNQUOTED, `{{ entry }}: {{ default }}`, unlike the Choice/Toggle branch beside it
+    # which runs every name through `yaml_dump`. YAML 1.1 resolves `false` AND `off` both to the
+    # boolean `False`, and `true` AND `on` both to `True`, so the emitted block carried two pairs of
+    # duplicate keys and `Utils.UniqueKeyLoader` raised `KeyError: Duplicate key False found in
+    # YAML` on the default template for this game. Under any loader that does NOT check duplicates
+    # it is quieter and worse: `on: 0` silently overwrites `true: 50`, so the template ships with
+    # its own default weighted to zero. `test_gf_option_template_yaml.py` is the gate.
+    #
+    # Nothing is lost by their absence, because these names were never the path a player's yaml
+    # takes. `true` / `false` / `on` / `off` / `yes` / `no` written unquoted in a yaml are YAML 1.1
+    # BOOLEANS -- they arrive as Python `bool` and are answered by the `from_any` override below,
+    # which is what actually carries the "every yaml in the wild says `true`" promise. The names
+    # kept here are for the quoted spellings and for the weights-dict form. `false` / `true` are
+    # kept because they are the words the option was born with; `none` / `all` because a share
+    # reads naturally that way and neither is a YAML boolean.
+    special_range_names = {"false": 0, "none": 0,
+                           "true": 100, "all": 100}
+
+    @classmethod
+    def from_any(cls, data):
+        """🛑 A yaml `true` arrives here as a Python **bool**, and `bool` is a subclass of `int`, so
+        AP's `Range.from_any` would fall through to `cls(int(data))` and read `true` as the integer
+        **1** -- i.e. 1%, which is indistinguishable from OFF and would silently invert this option
+        for every existing yaml. `from_text` never sees it, because the value is not a string.
+        Catch the bool BEFORE the int path. (`Toggle.from_any` had the same shape and did not need
+        this only because its range already was 0..1.)"""
+        if isinstance(data, bool):
+            return cls(cls.range_end if data else cls.range_start)
+        return super().from_any(data)
+
+
+# ---- PRESENTATION: what the OPTIONS WIZARD shows for each class -----------------------------------
+# The wizard rendered `valid_keys` as RAW KEYS, SORTED ALPHABETICALLY, with no per-key text. Three
+# things were wrong with that and none of them are cosmetic:
+#
+#   1. THE KEYS DO NOT NAME WHAT THEY SELECT. `Church` is not "church locations", it is the 13 Sacred
+#      Tears; `Basin` is Crystal Tears; `Seedtree` is Golden Seeds. A player ticking `Church`
+#      reasonably believed they were opening up churches. Worse, the SAME concept had two names in two
+#      adjacent fields of the same page: Crystal Tears are `Basin` here and `crystal_tears` in
+#      keep_local / exclude_local_item_only.
+#   2. ALPHABETICAL SCATTERED THE FAMILIES. Boss / FieldBoss / LegacyBoss / MajorBoss landed in four
+#      separate places in the grid, and the three Shop classes in three.
+#   3. THE GRID HID THE LATTICE. Most of these classes CONTAIN each other (see class_containment),
+#      so ticking a broad class silently makes narrower boxes no-ops -- with no signal at all.
+#
+# Renaming the KEYS is a compat break: AP 0.6.7 Options.py `VerifyKeys.verify_keys` RAISES OptionError
+# on an unknown key, so every yaml in the wild saying `Church` would HARD-FAIL generation, not
+# silently drop. So the keys stay and the LABEL is the fix; renaming them (with the old names kept as
+# deprecated aliases) is a separate, deliberate change.
+#
+# DISPLAY ORDER LIVES HERE, not in contract.SURFACE_CLASSES -- that list's order is a determinism
+# handle for the ladder and must never be rearranged (see the comment on it).
+SURFACE_CLASS_FAMILIES = (
+    ("bosses", "Bosses", ("Boss", "MajorBoss", "FieldBoss", "MinorDungeonBoss",
+                          "Remembrance", "GreatRune")),
+    ("collectathon", "Collectathon lines",
+     ("Seedtree", "Church", "Basin", "Fragment", "Revered")),
+    ("merchants", "Merchants", ("ShopSlot", "ShopNonSpell", "Shop")),
+    ("items", "Items", ("KeyItem", "Legendary")),
+    ("sweeps", "Dungeon sweeps", ("SweepSlot", "SweepSlotMajor", "SweepSlotMinor")),
+)
+
+# key -> (label, hint). The label says what the class IS in the words the game uses; the hint says
+# what it costs you to pick it. Kept short on purpose: the option's own docstring carries the essay.
+SURFACE_CLASS_LABELS = {
+    "SweepSlotMajor": ("One check per MAJOR boss sweep",
+                     "The SweepSlot half whose trigger is a major boss -- the same roster the "
+                     "MajorBoss class uses, so a demigod's sweep and a cave's are priced apart. "
+                     "40 of 218 triggers. A subset of SweepSlot: ticking both adds nothing."),
+    "SweepSlotMinor": ("One check per MINOR boss sweep",
+                     "The other half -- every sweep whose trigger is not on the major roster. "
+                     "178 of 218 triggers, and the breadth is the point: these are the caves, "
+                     "catacombs, tunnels and field bosses. A subset of SweepSlot."),
+    "SweepSlot":    ("One check per dungeon sweep",
+                     "Not a kind of check -- ONE member of every sweep your seed runs, so clearing "
+                     "an area can pay out progression. Adds about as many slots as you have sweeps "
+                     "(55 in a 4-region seed, ~170 on the full map) and needs Dungeon Sweep on."),
+    "Boss":         ("Any boss drop",
+                     "Every enemy the game gives a boss healthbar. Contains all the boss classes "
+                     "below, so ticking this makes them redundant."),
+    "MajorBoss":    ("Major bosses",
+                     "Remembrance and great-rune arena bosses, curated majors for the regions "
+                     "that have none, and every boss standing inside a legacy dungeon (the former "
+                     "Legacy dungeon bosses class, absorbed v0.4.10). Contains Remembrances and "
+                     "Great Runes."),
+    "MinorDungeonBoss": ("Minor dungeon bosses",
+                     "Catacomb, cave, tunnel, gaol and Divine Tower bosses -- the minidungeons. "
+                     "NOT the underground REGIONS: Nokron, Nokstella, Siofra and Ainsel are "
+                     "overworld-sized and their bosses are elsewhere in this list."),
+    "FieldBoss":    ("Overworld bosses",
+                     "Field, evergaol and dragon bosses out in the open world. The least "
+                     "region-confident boss class -- 22 of them sit on a guessed region."),
+    "Remembrance":  ("Remembrances",
+                     "The Remembrance a great boss drops."),
+    "GreatRune":    ("Great Runes",
+                     "The seven Great Runes."),
+    "Seedtree":     ("Golden Seeds",
+                     "The 43 Golden Seed pickups."),
+    "Church":       ("Sacred Tears",
+                     "The 13 Sacred Tears in the ruined churches -- NOT all church locations."),
+    "Basin":        ("Crystal Tears",
+                     "Physick tears. The same items keep_local calls `crystal_tears`."),
+    "Fragment":     ("Scadutree Fragments",
+                     "Shadow of the Erdtree. Ignored in a base-game seed."),
+    "Revered":      ("Revered Spirit Ashes",
+                     "Shadow of the Erdtree. Ignored in a base-game seed."),
+    "ShopSlot":     ("One slot per merchant",
+                     "At most ONE ware per merchant, so no shop can dominate the surface by the "
+                     "size of its stock. 12 slots."),
+    "ShopNonSpell": ("General merchants",
+                     "Every merchant slot except a dedicated spell vendor's stock. 442 checks -- "
+                     "picking this makes the seed mostly 'farm runes, buy your progression'."),
+    "Shop":         ("Every merchant slot",
+                     "All 562 shop rows, spell vendors included. Contains the two classes above."),
+    "KeyItem":      ("Key items",
+                     "The hand-reviewed quest and door keys."),
+    "Legendary":    ("Legendary items",
+                     "Everything the params rank rarity 3. Enia's buy-only remembrance store is "
+                     "excluded from the surface whatever you pick here."),
+}
+
+
+def surface_class_meta(classes=None):
+    """Ordered [{key, label, hint, family, family_label}] for the wizard. RAISES on a gap.
+
+    🛑 LOUD, not defaulted. A class added to contract.SURFACE_CLASSES with no label would otherwise
+    render as a bare key in a grid of labelled ones -- the exact state this function exists to end,
+    reintroduced silently for the newest class. Same for a class that no family claims: it would
+    simply not be drawn, and the player would have no way to select something the world offers.
+    """
+    vocab = list(classes if classes is not None else contract.SURFACE_CLASSES)
+    placed = {}
+    for fam, fam_label, keys in SURFACE_CLASS_FAMILIES:
+        for k in keys:
+            if k in placed:
+                raise ValueError("surface class %r is in two families (%s, %s)"
+                                 % (k, placed[k][0], fam))
+            placed[k] = (fam, fam_label)
+    missing_family = [c for c in vocab if c not in placed]
+    if missing_family:
+        raise ValueError("surface classes with no family, so the wizard would never draw them: %s "
+                         "-- add them to SURFACE_CLASS_FAMILIES" % ", ".join(missing_family))
+    stray = [k for k in placed if k not in vocab]
+    if stray:
+        raise ValueError("SURFACE_CLASS_FAMILIES names classes outside the vocabulary: %s"
+                         % ", ".join(sorted(stray)))
+    missing_label = [c for c in vocab if c not in SURFACE_CLASS_LABELS]
+    if missing_label:
+        raise ValueError("surface classes with no label, which would render as a raw key: %s "
+                         "-- add them to SURFACE_CLASS_LABELS" % ", ".join(missing_label))
+    out = []
+    for fam, fam_label, keys in SURFACE_CLASS_FAMILIES:
+        for k in keys:
+            if k not in vocab:
+                continue
+            label, hint = SURFACE_CLASS_LABELS[k]
+            out.append({"key": k, "label": label, "hint": hint,
+                        "family": fam, "family_label": fam_label})
+    return out
+
+
+def class_containment(tags_map=None, classes=None):
+    """{class: [classes it strictly CONTAINS]}, DERIVED from the live tags. Never typed.
+
+    The wizard uses this to tell a player that a box they are about to tick adds nothing, or that
+    one they already ticked has swallowed another. Getting it from the data rather than a hand-kept
+    table is not a style preference: contract.py carried this lattice as a COMMENT and the comment
+    was BACKWARDS for months (it said MajorBoss was a subset of Remembrance/GreatRune; it is their
+    superset). A table can be wrong in a way a derivation cannot.
+
+    A class contains another when every tagged check of the narrower one also carries the broader
+    tag. Equal sets would contain each OTHER, which is not useful to draw, so only STRICT
+    containment is reported. An empty class contains nothing (it is vacuously inside everything --
+    true, and useless).
+    """
+    lt = LOCATION_TAGS if tags_map is None else tags_map
+    vocab = list(classes if classes is not None else contract.SURFACE_CLASSES)
+    members = {c: {ap for ap, ts in (lt or {}).items()
+                   if c in (ts or ())
+                   or set(ts or ()) & contract.SURFACE_CLASS_EXTRA_TAGS.get(c, frozenset())}
+               for c in vocab}
+    out = {}
+    for outer in vocab:
+        inner = [c for c in vocab
+                 if c != outer and members[c] and members[c] < members[outer]]
+        if inner:
+            out[outer] = inner
+    # ⭐ THE DERIVED CLASSES HAVE NO TAGS, so the loop above cannot see them and the wizard would
+    # tell a player that ticking SweepSlot and SweepSlotMajor together buys something. It does not.
+    # Still not a typed table: the relation is read off contract.SWEEP_SLOT_CLASS_WANTS -- the same
+    # structure the filter uses -- so it cannot disagree with what the surface actually does.
+    subs = [c for c, want in contract.SWEEP_SLOT_CLASS_WANTS.items()
+            if want is not None and c in vocab]
+    if subs and "SweepSlot" in vocab:
+        out.setdefault("SweepSlot", []).extend(sorted(subs))
+    return out
+
+
+# ---- pure, host-testable helpers (no AP import; unit-tested with synthetic tags) ------------------
+def selected_surface(sel):
+    """Filter a raw selection to the valid vocabulary, in CANONICAL (vocabulary) order.
+
+    DETERMINISM: this option is an OptionSet, and a Python set of strings does NOT have a stable
+    iteration order across processes (string hashing is randomised per run). Ordering by the selection
+    would therefore make the ladder -- and the fill that follows it -- differ between two runs of the
+    SAME seed. So the order comes from the VOCABULARY, never from the caller's container. (This is the
+    same class of bug as regionSphereTargetRanges being emitted in set-iteration order, 2026-07-11.)
+    Accepts a list or a set; the result is identical either way."""
+    chosen = set(sel or ())
+    return [c for c in contract.SURFACE_CLASSES if c in chosen]
+
+
+def build_ladder(selection):
+    """Ordered list of allowed-class-sets for the STRICT feasibility ladder, starting from the user's
+    base surface and widening by _WIDEN_GROUPS. Pure. Empty selection -> [] (feature no-op)."""
+    base = selected_surface(selection)
+    if not base:
+        return []
+    rungs = [list(base)]
+    acc = list(base)
+    # 🛑 A RUNG IS JUDGED BY WHAT IT ADMITS, NOT BY WHETHER IT SPELLS A NEW CLASS NAME (#733).
+    #
+    # This used to skip a group only when every class in it was already accumulated. That is the same
+    # confusion the default surface had: `Remembrance` and `GreatRune` are strict SUBSETS of
+    # `MajorBoss`, so on any surface carrying `MajorBoss` the first widen group adds two names and
+    # ZERO locations. While the two also sat in the default the two tests coincided by accident and
+    # nothing showed; taking them out of the default made the ladder grow an inert rung, and
+    # `test_the_shipped_default_ladder_has_no_inert_rung` caught it.
+    #
+    # An inert rung is not free: STRICT retries the whole fill on it, on seeds that are already
+    # struggling to place their locks. The classes still ACCUMULATE (a later group may combine with
+    # them; carrying them costs nothing), we simply do not spend a rung on a set that admits nothing
+    # new.
+    #
+    # Falls back to the old name test when LOCATION_TAGS is absent (pre-regen), so the feature still
+    # builds a ladder on an ungenerated tree.
+    def _admits(classes):
+        if not LOCATION_TAGS:
+            return None
+        return len(allowed_ap_ids(LOCATION_TAGS, set(classes)))
+
+    seen = _admits(acc)
+    for grp in _WIDEN_GROUPS:
+        add = [c for c in grp if c not in acc]
+        if not add:
+            continue
+        acc = acc + add
+        grew = _admits(acc)
+        if seen is not None and grew is not None and grew <= seen:
+            continue
+        rungs.append(list(acc))
+        seen = grew
+    return rungs
+
+
+# The tag the hub-merchant bar reads. Pinned by test_gf_hub_merchant_bar against the tag names the
+# generated data actually supplies (#707).
+#
+# 🛑 `Shop`, NOT `ShopSlot`. The guard was written 2026-07-18 against `ShopSlot`; the 2026-07-24
+# ShopSlot rework redefined that tag as "at most ONE progression slot per MERCHANT, pinned to a
+# merchant-unique ware" (gen_data.py) and stopped emitting it for hub rows. From that day the guard
+# read a tag the hub does not carry and barred ZERO rows -- silently, because a derivation that reads
+# a tag the data does not supply looks exactly like a derivation with nothing to do. That is what made
+# the docstring's "derived from the generated data ... without a hand-list" a false comfort rather
+# than a claim anyone could check. `Shop` is what hub merchant rows carry, and it is a strict SUPERSET
+# of `ShopNonSpell`, `EniaShop` and `ShopSlot`, so it needs no companion tag.
+_HUB_MERCHANT_TAGS = ("Shop",)
+
+
+def _roundtable_merchant_aps():
+    """MERCHANT rows filed in Roundtable Hold, the always-open hub. This includes Enia and the Twin
+    Maiden Husks plus multi-site rows collapsed into the hub, notably questline Patches/Thiollier.
+    BARRED from the progression surface (Alaric 2026-07-18): a hub-filed merchant slot otherwise
+    looks reachable at spawn. Ordinary wandering merchants are filed in their physical regions and
+    remain eligible; this rule touches only hub MERCHANT rows. The hub's Golden Seed checks
+    (Seedtree, physical pickups) are left to the normal surface/defaulted logic.
+
+    Derived from the generated data, so a regen that adds or moves a hub merchant row is covered
+    without a hand-list -- but "derived" is only as good as the tag name being one the data still
+    emits, which is the whole of #707. See `_HUB_MERCHANT_TAGS`.
+
+    ONE CAUSE; the union happens at the chokepoint. This returns EVERY hub merchant row, not the
+    subset no other bar covers -- of the 184 it returns, 95 are ALSO SHOP_RELEASE_GATED and 58 are
+    ALSO DEFAULTED. Subtracting those here would make this bar's answer
+    depend on tables that answer different questions, and move it whenever they regenerate (the
+    failure `collapsed_lift_aps` documents as "ONE CAUSE AT A TIME"). `allowed_ap_ids` unions the
+    bars and is the only place that should mix them."""
+    try:
+        from ..tables.data import LOCATIONS, HUB
+        from ..tables.location_tags import LOCATION_TAGS as _lt
+    except Exception:
+        return frozenset()
+    return frozenset(ap for (_n, ap, _f) in LOCATIONS.get(HUB, ())
+                     if any(t in _lt.get(ap, ()) for t in _HUB_MERCHANT_TAGS))
+
+
+def allowed_ap_ids(tags_map, classes, defaulted=None):
+    """ap-ids whose tags put them ON THE SURFACE for `classes` (Roundtable-Hold merchants -- Enia +
+    Twin Maiden Husks -- hard-excluded). Pure.
+
+    Checks in `defaulted` (DEFAULTED_REGION_APS) are BARRED regardless of tags: their region was a
+    guess that fell back to the hub, so AP believes them reachable at spawn while the item actually
+    spawns wherever it really lives. Fill put a STORMVEIL CASTLE LOCK on one such Golden Seed
+    (flag 400220, really in Stormveil) in a Caelid-start seed -- unwinnable. A guessed region may not
+    carry progression. See gen_data._region_is_derived(). The hub MERCHANT slots are barred for a
+    related reason -- always reachable at spawn -> trivial progression (see _roundtable_merchant_aps)."""
+    sel = set(classes)
+    if defaulted is None:
+        try:
+            from ..tables.location_tags import DEFAULTED_REGION_APS as _d
+        except Exception:
+            _d = frozenset()
+        try:
+            # m11_00 (normal Leyndell): destroyed when Maliketh dies (the Erdtree burns). Same rule --
+            # a check the player can put permanently out of reach may not carry progression.
+            from ..tables.location_tags import ERDTREE_BURN_APS as _b
+        except Exception:
+            _b = frozenset()
+        defaulted = frozenset(_d) | frozenset(_b)
+    # Hub merchant slots are barred in EVERY path (own + foreign), regardless of how `defaulted` was
+    # computed/passed -- this is the single surface chokepoint both confinements funnel through.
+    # SURFACE_EXCLUDE_APS (hand-excluded surface-tagged checks, e.g. Secret Rite Scroll -- gen_data
+    # _SURFACE_EXCLUDE_FLAGS) are barred here too, always, for the same reason. Release-gated shop
+    # rows are likewise unconditional: a row absent from the shelf cannot host progression even
+    # when its region is known and open (#724).
+    try:
+        from ..tables.location_tags import SURFACE_EXCLUDE_APS as _sx
+    except Exception:
+        _sx = frozenset()
+    try:
+        from ..tables.location_tags import SHOP_RELEASE_GATED_APS as _sg
+    except Exception:
+        _sg = frozenset()
+    barred = (frozenset(defaulted) | _roundtable_merchant_aps()
+              | frozenset(_sx) | frozenset(_sg))
+    return {ap for ap, tags in tags_map.items()
+            if contract.has_class(tags, sel) and ap not in barred}
+
+
+def sweep_slot_aps(world, classes, tag_ids=frozenset()):
+    """The SweepSlot half of the surface: AT MOST ONE member per enabled sweep trigger.
+
+    Empty unless `SweepSlot` is in `classes`, so nothing shipped moves. This is the only surface
+    class that is DERIVED rather than tagged (contract.SURFACE_DERIVED_CLASSES) -- gen_data cannot
+    bake it, because whether a check is a sweep member is a per-seed answer (the rung) and whether it
+    is on the surface is the question we are answering.
+
+    # WHY ONE PER SWEEP, and not all of them
+
+    MEASURED 2026-08-13, one ER slot + DOOM 1993, num_regions 4: a default seed's sweeps grant
+    **924 of its 1517 locations (60.9%)**, against a surface of 30 (2.0%). Admitting every member
+    would take the surface to ~63% of the seed -- which does fix the intake collapse #631 is about,
+    and makes "confined to the surface" mean almost nothing, which is the promise the option exists
+    to keep. One member per trigger is 55 here and 218 full-map: it roughly DOUBLES the surface
+    without diluting it.
+
+    This is ShopSlot's argument, deliberately: "a merchant enters the pool once, so however large
+    their stock they can hold at most one progression item and cannot dominate the surface by
+    breadth." A sweep is the same shape -- a trigger with a large membership -- and gets the same
+    treatment.
+
+    # WHICH member
+
+    The lowest ap-id NOT already on the tag surface (`tag_ids`), falling back to the lowest overall.
+    Two reasons it is not a random draw: `world.random` is consumed a different number of times
+    depending on how hard fill works, so drawing here would move the seed for everything downstream
+    (the reason `_confine_draw` is a hash); and the choice must be reproducible from the multidata
+    for the tracker to star the same check the fill used. Skipping the tag surface matters because
+    the six SURFACE-CUTTABLE classes are still in the pre-cut member lists, so a naive `min()` can
+    nominate a check the surface already had -- adding a name and no breadth.
+
+    🛑 Reads `boss_locks.rung_sweeps`, NOT `enabled_sweeps`. The latter applies the per-seed surface
+    cut, which reads the surface, which is this function -- a cycle. `rung_sweeps` reads only
+    `dungeon_sweep`.
+    """
+    chosen = [c for c in contract.SURFACE_CLASSES
+              if c in set(classes or ()) and c in contract.SWEEP_SLOT_CLASS_WANTS]
+    if not chosen:
+        return frozenset()
+    try:
+        from .boss_locks import rung_sweeps  # noqa: PLC0415 -- import cycle at module scope
+    except Exception:
+        return frozenset()
+    try:
+        from ..tables.location_tags import SURFACE_EXCLUDE_APS as _sx
+    except Exception:
+        _sx = frozenset()
+    barred = (frozenset(_world_barred_aps(world)) | _roundtable_merchant_aps() | frozenset(_sx))
+    sweeps = rung_sweeps(world)
+    # 🛑 PASS BOTH AUTHORITIES EXPLICITLY. `contract.sweep_slot_skips()` can resolve healthbars
+    # itself, but only via a package-relative import, and an absent arena row now means UNAUDITED --
+    # fail closed for progression-surface eligibility (#671). Ordinary sweep payouts are untouched.
+    # only via a package-relative import, and on failure it degrades to the DECLARED skips alone --
+    # which would quietly put the unfireable triggers back on the surface and reopen #672. The
+    # production path must not depend on an import that is allowed to fail; the census tool, which
+    # has no world, keeps the lazy default.
+    try:
+        from ..tables.boss_healthbars import BOSS_HEALTHBARS  # noqa: PLC0415 -- data leaf
+        from ..tables.boss_sweeps import SWEEP_ARENA_REGION, SWEEP_REGION  # noqa: PLC0415 -- data leaf
+        skips = contract.sweep_slot_skips(healthbars=BOSS_HEALTHBARS,
+                                          arena_regions=SWEEP_ARENA_REGION,
+                                          member_regions=SWEEP_REGION,
+                                          triggers=sweeps)
+    except Exception:
+        # The ruling is fail-CLOSED: without the authoritative audit table every trigger is
+        # unaudited. Returning no nominations is safer than quietly widening to guessed arenas.
+        return frozenset()
+    # #703: more members per sweep when there are FEW partners, exactly one when there are many.
+    # In a 2-game world the partner's progression saturates its own ~404 locations during
+    # fill_restrictive and the useful tier is exhausted before the scan reaches a partner slot; the
+    # fix is more slots, not weaker curation -- on-surface stayed 100% across the whole measured
+    # curve, which is why this beats lowering `confine_foreign_progression`.
+    #
+    # 🛑 `players - 1`, i.e. FOREIGN players. A solo seed has nothing to send, `slots_per_sweep`
+    # returns 1 there, and a solo generation is byte-unchanged.
+    foreign = getattr(getattr(world, "multiworld", None), "players", 1) - 1
+    # #734: the class decides WHICH sweeps, `nominate_sweep_slots` still decides which MEMBER. The
+    # split is a filter on the trigger set and nothing else -- so a seed selecting plain `SweepSlot`
+    # nominates exactly what it did before, byte for byte, and one selecting both subclasses gets
+    # the same set by a different route (they partition it; there is no third bucket).
+    try:
+        from ..tables.boss_sweeps import MAJOR_SWEEP_TRIGGERS  # noqa: PLC0415 -- data leaf
+    except Exception:
+        # 🛑 DEGRADE TO THE WHOLE SET, NOT TO EMPTY. Without the table the split cannot be honoured;
+        # nominating nothing would silently shrink a surface the player asked to widen, and an
+        # empty surface is the failure this feature exists to prevent (#631).
+        MAJOR_SWEEP_TRIGGERS = frozenset()
+        chosen = ["SweepSlot"] if set(chosen) else []
+    out = set()
+    for cls in chosen:
+        part = contract.sweeps_for_surface_class(sweeps, cls, MAJOR_SWEEP_TRIGGERS)
+        if not part:
+            continue
+        out |= contract.nominate_sweep_slots(part, barred=barred, prefer_not_in=tag_ids,
+                                             skips=skips, slots=contract.slots_per_sweep(foreign))
+    return frozenset(out)
+
+
+def surface_ap_ids(world, classes):
+    """THE surface for `classes`: the tagged half plus the derived half, in one expression.
+
+    Every caller that used to say `allowed_ap_ids(LOCATION_TAGS, classes, defaulted=...)` says this
+    instead -- the fill's own confinement, the foreign bar, the ladder's open-location scan and the
+    slot_data emit. That was already the file's rule for the tag half ("the single surface chokepoint
+    both confinements funnel through"); a derived class that reached only three of the four would put
+    a progression item somewhere the tracker does not star, or star a check the fill cannot use."""
+    ids = allowed_ap_ids(LOCATION_TAGS, classes, defaulted=_world_barred_aps(world))
+    extra = sweep_slot_aps(world, classes, ids)
+    return (ids | extra) if extra else ids
+
+
+def is_restricted_progression(item, player):
+    """True iff `item` is THIS world's own progression: advancement, owned by `player`. Every type,
+    no exemptions (colombius, 2026-10-06: the old ability Unlock exemption put Roll and L1 in shops
+    under a Boss-only surface). Pure over an item-like."""
+    return getattr(item, "player", None) == player and bool(getattr(item, "advancement", False))
+
+
+def _foreign_open_locations(multiworld, er_players):
+    """Every location in a NON-Elden-Ring player's world that we may honestly offer a Lock.
+
+    Four filters, and each one is load-bearing:
+
+    * **not ours** -- `er_players` is every slot this hook is running for. An Elden Ring location is
+      the other pass's business.
+    * **empty** -- `loc.item is None`. A location another world already filled during its own
+      `pre_fill` is spoken for; overwriting it is how you corrupt a partner's plando.
+    * **not `locked`** -- AP's flag for "this location's content is decided". Event locations carry
+      it, and so does anything a world nailed down deliberately.
+    * 🛑 **not EXCLUDED** -- `exclude_locations` is the player's promise that nothing REQUIRED will
+      be there, and a released Lock is progression. `fill_restrictive` does NOT check
+      `progress_type` (`distribute_items_restrictive` filters before calling it), so if we do not
+      filter here, nobody does, and a partner's excluded check quietly becomes mandatory.
+
+    Reachability is NOT filtered: `fill_restrictive` walks its own sphere order and that is the one
+    judgement it makes better than a predicate can.
+    """
+    try:
+        from BaseClasses import LocationProgressType
+        excluded = LocationProgressType.EXCLUDED
+    except Exception:      # a BaseClasses without the enum: filter nothing rather than crash
+        excluded = object()
+    return [
+        loc for loc in multiworld.get_locations()
+        if loc.player not in er_players
+        and loc.item is None
+        and not getattr(loc, "locked", False)
+        and getattr(loc, "progress_type", None) is not excluded
+    ]
+
+
+def balanced_foreign_quotas(total: int, foreign_games, rng):
+    """Near-even per-game quotas, giving indivisible remainders to partner games first.
+
+    The owner game is the implicit final bucket.  Eleven items at a three-game table therefore
+    yields 4 + 4 abroad and 3 at home, rather than one aggregate batch of 4 split 2 + 2 abroad.
+    When there are fewer items than partner games, seeded shuffling decides which partners receive
+    the available singleton shares; no item is duplicated and the result remains reproducible.
+    """
+    games = sorted(set(foreign_games))
+    if total <= 0 or not games:
+        return {game: 0 for game in games}
+    n_games = len(games) + 1             # partner games plus the Elden Ring owner game
+    base, remainder = divmod(total, n_games)
+    order = list(games)
+    rng.shuffle(order)
+    quotas = {game: base for game in games}
+    for game in order[:remainder]:       # remainder <= n_games - 1 == len(games)
+        quotas[game] += 1
+    return quotas
+
+
+def balance_active(world, n_games: int) -> bool:
+    """Does the balanced 1/N-per-game shape (#927) govern this slot -- both halves of it?
+
+    True exactly when `cross_game_progression` is AUTO (-1) at a multi-game table. There is no
+    separate toggle: #929's draft shipped one and it was folded into auto before release (Alaric
+    2026-08-20) -- one lever, three regimes. `aggregate` (-2) and explicit percentages run the
+    older one-batch pass; `never`/0 sends nothing. An explicit value -- 0 included -- is a
+    declaration the balanced pass must not silently override (DECLARED IS NOT EMITTED, the #635
+    disease); auto means "let the world pick the shape", and per-game 1/N IS the better shape.
+    """
+    if n_games <= 1:
+        return False
+    opt = getattr(getattr(world, "options", None), "cross_game_progression", None)
+    return opt is not None and int(opt.value) == -1
+
+
+def place_released_locks(multiworld, worlds) -> None:
+    """`stage_fill_hook`: place every Elden Ring world's travelling progression across every Elden
+    Ring world's surface, in ONE pass, and spill whatever does not fit back into the pool.
+
+    # Why this is not an item_rule (er-archipelago#491)
+
+    The first version barred a released Lock from our own non-surface checks and let the general
+    fill place it. It worked -- 42-48% travel in a two-slot multiworld with ~90% of Locks still on
+    curated checks -- and it had NO SPILL. `apply()` is documented "Never FillErrors" because
+    confined Locks get the feasibility ladder AND the return-to-pool valve; a bare item_rule has
+    neither, so a seed whose surface is too small simply fails. Three configurations found it --
+    a narrowed surface, `num_regions: 1`, and a shifted filler pool -- each missed by a different
+    threshold, because capacity is not the constraint: REACHABLE capacity in sphere order is, and no
+    count of open slots can see it. A real fill can, because it just tries.
+
+    # Why `stage_fill_hook` and not `pre_fill`
+
+    🛑 Placing foreign items from `pre_fill` is both slot-order-dependent and out of spec (TUNIC
+    raises at it). The hook is `stage_fill_hook`; see docs/specs/SPEC-fill-hook-migration-20260907.md.
+
+    🛑 Unlike TUNIC's, our items are PROGRESSION, not filler, so this cannot be a `place_locked_item`
+    loop: it needs `fill_restrictive` with a real state, the way `_place` already does.
+
+    # Cross-game (#703)
+
+    Cross-game USED to be deliberately untouched: this hook saw only Elden Ring worlds, and a Lock
+    bound for a partner was one it did not place -- it spilled to the general fill. That was the
+    design, and the measurement says the valve never opened: our surfaces host ~170 checks against
+    at most ~36 Locks, so nothing ever spilled. **0 Locks reached a Hollow Knight slot across four
+    configurations**, including a 2xER + 1xHK seed where 15 of 28 Locks travelled and every one went
+    to the other Elden Ring world.
+
+    So `cross_game_progression` routes a share of the eligible progression at partner locations
+    FIRST, before the ER surfaces get a look. `auto` is 1/n_games -- half in a two-game seed.
+
+    #811: that set used to be `gf_released_lock_items`, so despite the option's name the pass could
+    see Region Locks and NOTHING ELSE. Required Great Runes were advancement, but `apply()` removed
+    them first and locked them onto their owner's surface. The pass now reads
+    `gf_released_progression_items`: released Locks plus every non-Lock advancement item whenever
+    this world has a non-zero cross-game share. The remainder still falls through to the same ER
+    surface pass, preserving curation and reachability.
+
+    ⚠️ THIS FILLS ANOTHER GAME'S LOCATIONS, which is exactly what the note above warns about: TUNIC
+    raises "caused by another world filling TUNIC locations during pre_fill" and cannot recover.
+    Three things keep that as narrow as possible -- only EMPTY, unlocked locations are offered, the
+    fill is partial so nothing is forced, and the whole pass is caught so our failure can never be
+    the thing that breaks a generation. It is still a real risk with a game that objects on
+    principle, and `cross_game_progression: 0` is the escape hatch.
+    """
+    import inspect
+    import logging
+    from Fill import fill_restrictive
+
+    items, locations, participants = [], [], []
+    for w in worlds:
+        pending = list(getattr(w, "gf_released_progression_items",
+                               getattr(w, "gf_released_lock_items", ())) or ())
+        if not pending:
+            continue
+        participants.append(w)
+        items.extend(pending)
+    if not items:
+        return
+    # EVERY Elden Ring world's surface hosts, not only the worlds that sent something: a table where
+    # one slot releases and the others pin everything home (progression_bias 100) otherwise offered
+    # the sender nothing but its own surface, and its "travelling" progression could not leave.
+    hosts = list(worlds)
+    for w in hosts:
+        locations.extend(_open_allowed(w, selected_surface(_selection(w))))
+
+    # Out of the pool for the duration: fill_restrictive places from the list we hand it, and an
+    # item left in `itempool` as well would be placed twice. Whatever survives goes back below.
+    for it in items:
+        multiworld.itempool.remove(it)
+    n0 = len(items)
+    kwargs = {"lock": True}
+    if "allow_partial" in inspect.signature(fill_restrictive).parameters:
+        kwargs["allow_partial"] = True
+
+    # ---- CROSS-GAME FIRST (#703, per-partner balance #927) -----------------------------------
+    # Offered BEFORE the Elden Ring surfaces, because our surfaces have four times the room they
+    # need and would otherwise absorb every progression item -- which is the measured defect.
+    cross_offered = cross_placed = 0
+    er_players = {w.player for w in worlds}
+    n_games = len({w.game for w in getattr(multiworld, "worlds", {}).values()}) or 1
+    balanced_players = {w.player for w in participants if balance_active(w, n_games)}
+    foreign_all = _foreign_open_locations(multiworld, er_players)
+    foreign_by_game = {}
+    for loc in foreign_all:
+        game = multiworld.worlds[loc.player].game
+        foreign_by_game.setdefault(game, []).append(loc)
+
+    # The opt-in guarantee is PER SOURCE and PER DESTINATION GAME. The old pass made one aggregate
+    # foreign batch, so 11 ER progression items at a three-game table produced 4 abroad total and
+    # ordinary fill happened to split it 2/2. Balanced mode gives each partner its own near-1/N
+    # quota: 4/4 abroad, 3 left for the ER surfaces. All seven Great Runes are already advancement
+    # whenever a rune ending is active; the numerator is those seven PLUS every travelling Lock and
+    # other restricted progression item from this source slot.
+    if balanced_players and foreign_by_game:
+        rune_names_by_player = {w.player: set(w._required_runes()) for w in participants}
+        for player in sorted(balanced_players):
+            mine = [item for item in items if item.player == player]
+            if not mine:
+                continue
+            source_total = len(mine)
+            mine_ids = {id(item) for item in mine}
+            items = [item for item in items if id(item) not in mine_ids]
+            # 🛑 GREAT RUNES GET THEIR OWN 1/N SPLIT, NOT A SHARE OF THE LOCKS'. The default goal is
+            # now `great_runes` (v0.6.1), which makes all seven runes advancement. Pooled with the
+            # Locks they drown the Locks' share: the shipped smoke measured Locks reaching The Wind
+            # Waker in 15/15 seeds under the old default and 0 Locks in 2 of 11 under the new one,
+            # with nothing changed but the goal. Locks travelling abroad is a property of the mod,
+            # not of which ending is chosen, so the Locks (and every other non-rune item) split
+            # exactly as they always did, and the runes are split alongside them.
+            runes = rune_names_by_player.get(player, set())
+            buckets = [b for b in ([i for i in mine if i.name not in runes],
+                                   [i for i in mine if i.name in runes]) if b]
+            home = []
+            for source in buckets:
+                multiworld.random.shuffle(source)
+                quotas = balanced_foreign_quotas(len(source), foreign_by_game, multiworld.random)
+                for game in sorted(quotas):
+                    quota = quotas[game]
+                    if quota <= 0:
+                        continue
+                    locs = foreign_by_game[game]
+                    # DERIVED CAP, stated loudly, never a generation failure: a tiny partner game
+                    # (Clique ships ONE location) cannot host its arithmetic share, and failing the
+                    # whole table because someone brought a small game would make the default
+                    # unshippable. The uncapped remainder falls back to the ER surfaces below --
+                    # the same place the owner bucket goes. Refused placements still raise.
+                    take = min(quota, len(locs))
+                    if take < quota:
+                        logging.getLogger("Greenfield").warning(
+                            "[greenfield:%s] balanced progression: %s can host only %d of its %d "
+                            "share (%d open location(s)); the remainder stays on the Elden Ring "
+                            "surfaces.", player, game, take, quota, len(locs))
+                    if take <= 0:
+                        continue
+                    batch, source = source[:take], source[take:]
+                    offered = len(batch)
+                    multiworld.random.shuffle(locs)
+                    fill_restrictive(
+                        multiworld, multiworld.get_all_state(False), locs, batch,
+                        **kwargs, name=f"Elden Ring Progression Share -> {game}")
+                    placed = offered - len(batch)
+                    cross_offered += offered
+                    cross_placed += placed
+                    if batch:
+                        # Refusals DEGRADE LOUDLY, same as the aggregate pass below has always
+                        # done: a partner's own location rules can refuse specific items (the
+                        # shipped two-game smoke measured Hollow Knight refusing 3 of 9
+                        # remembrances), and killing the whole table for it would make the default
+                        # unshippable. The refused items fall back to the Elden Ring surfaces.
+                        names = ", ".join(item.name for item in batch[:8])
+                        logging.getLogger("Greenfield").warning(
+                            "[greenfield:%s] balanced progression: %s accepted %d/%d; its rules "
+                            "refused %d (falling back to the Elden Ring surfaces): %s",
+                            player, game, placed, offered, len(batch), names)
+                        source.extend(batch)
+                        batch = []
+                    logging.getLogger("Greenfield").info(
+                        "[greenfield:%s] balanced progression: %s received %d/%d source item(s) "
+                        "(%d total progression, %d game(s))",
+                        player, game, placed, offered, source_total, n_games)
+                home.extend(source)
+            items.extend(home)  # the owner game's bucket goes to ER surfaces below
+
+    # Unbalanced ER slots retain the existing aggregate cross_game_progression behaviour exactly.
+    unbalanced = [w for w in participants if w.player not in balanced_players]
+    share = max((cross_game_share(w, n_games) for w in unbalanced), default=0)
+    if share > 0:
+        legacy_items = [item for item in items if item.player in {w.player for w in unbalanced}]
+        legacy_ids = {id(item) for item in legacy_items}
+        rest_items = [item for item in items if id(item) not in legacy_ids]
+        # Re-read after balanced placements: `foreign_all` was captured before those locations
+        # were filled, and handing the stale list to fill_restrictive would advertise occupied
+        # partner checks to an unbalanced ER slot in the same multiworld.
+        foreign = _foreign_open_locations(multiworld, er_players)
+        k = (len(legacy_items) * share + 50) // 100
+        if foreign and k > 0:
+            # The old list was all Locks, so its stable construction order did not matter. Once
+            # required Great Runes joined it, slicing before shuffling would let the leading Locks
+            # consume the entire cross-game quota and recreate #811 under a different name.
+            multiworld.random.shuffle(legacy_items)
+            batch, rest = legacy_items[:k], legacy_items[k:]
+            legacy_offered = len(batch)
+            cross_offered += legacy_offered
+            multiworld.random.shuffle(foreign)
+            try:
+                fill_restrictive(multiworld, multiworld.get_all_state(False), foreign, batch,
+                                 **kwargs)
+            except Exception:  # noqa: BLE001 -- see below
+                # 🛑 DELIBERATELY BROAD. This pass reaches into another game's locations, so the set
+                # of things it can raise is the set of things every OTHER apworld can raise, which is
+                # not enumerable from here. Curation is a nice-to-have; a failed generation is not.
+                # Swallowing leaves `batch` unplaced, and unplaced Locks fall through to the Elden
+                # Ring pass below exactly as they did before #703 existed.
+                logging.getLogger("Greenfield").warning(
+                    "[greenfield] progression surface: the cross-game progression pass raised and "
+                    "was abandoned; its %d item(s) fall back to the Elden Ring surfaces, which is the "
+                    "pre-#703 behaviour. Set cross_game_progression: 0 if this recurs",
+                    len(batch), exc_info=True)
+            legacy_placed = legacy_offered - len(batch)
+            cross_placed += legacy_placed
+            items = rest_items + batch + rest  # whatever it could not place rejoins the ER pass
+            logging.getLogger("Greenfield").info(
+                "[greenfield] progression surface: cross-game pass placed %d of %d offered "
+                "(%d%% share of %d eligible progression, %d game(s), %d open foreign location(s))",
+                legacy_placed, legacy_offered, share, len(legacy_ids), n_games, len(foreign))
+
+    # One matching pass, not "surface then fallback".  Two passes let an early Lock consume the
+    # only host compatible with a later Lock; the fallback could not swap against already-locked
+    # surface placements and reported a false shortage.  Keep the user's surface as the preferred
+    # prefix, then append every other enabled TRUSTED check so fill_restrictive can swap across the
+    # complete bipartite assignment.
+    surface_location_ids = {id(loc) for loc in locations}
+    trusted_locations = []
+    for world in hosts:
+        trusted_locations.extend(loc for loc in _open_trusted(world)
+                                 if id(loc) not in surface_location_ids)
+    multiworld.random.shuffle(locations)
+    multiworld.random.shuffle(trusted_locations)
+    locations.extend(trusted_locations)
+    state = multiworld.get_all_state(False)
+    # Same access-check override `_place` documents at length: under accessibility:minimal
+    # fill_restrictive stops verifying reachability, which would lock a Lock behind its own gate.
+    # Forced on for every participating world, restored in `finally` so a raise cannot leak it.
+    saved = [(w, getattr(w.options, "accessibility", None)) for w in hosts]
+    saved = [(w, acc, acc.value) for w, acc in saved if acc is not None]
+    try:
+        for _w, acc, _v in saved:
+            acc.value = 0
+        fill_restrictive(multiworld, state, locations, items, **kwargs)
+    finally:
+        for _w, acc, v in saved:
+            acc.value = v
+
+    # A strict evidence policy cannot silently spill into HOLD. Restore the exact pool objects before
+    # refusing so the diagnostic does not leave a half-mutated generation behind.
+    for it in items:
+        multiworld.itempool.append(it)
+    if items:
+        names = ", ".join(sorted(it.name for it in items))
+        raise OptionError(
+            "Evidence-confined released progression has no compatible TRUSTED placement for %d "
+            "item(s) after widening across every enabled trusted check: %s"
+            % (len(items), names))
+    logging.getLogger("Greenfield").info(
+        "[greenfield] progression surface: placed %d/%d RELEASED Lock(s) (%d abroad) across %d "
+        "Elden Ring world(s); trusted-only terminal widening left %d unplaced%s",
+        n0 - len(items), n0, cross_placed, len(participants), len(items),
+        (": "
+         + ", ".join(sorted(it.name for it in items))) if items else "")
+
+
+def foreign_advancement_barred(item, player):
+    """True iff `item` is ANOTHER player's advancement item -- the thing confine_foreign_progression
+    keeps off this world's non-surface (filler) checks. Our OWN items (any classification) and any
+    non-advancement item pass. Pure over an item-like with .player/.advancement. The core item_rule on
+    a non-surface location is `not foreign_advancement_barred(item, self.player)`."""
+    return bool(getattr(item, "advancement", False)) and getattr(item, "player", None) != player
+
+
+def confine_pct(world) -> int:
+    """The share of foreign advancement this world confines to its surface, 0-100.
+
+    Absent option -> 100, i.e. the pre-share behaviour. That is the opposite convention from
+    `_released_pct`, and deliberately so: both mean "an older or stubbed world behaves exactly as it
+    did before the option existed", and before this option existed the bar was unconditional."""
+    o = getattr(getattr(world, "options", None), "confine_foreign_progression", None)
+    if o is None:
+        return 100
+    try:
+        return max(0, min(100, int(o.value)))
+    except (TypeError, ValueError):
+        return 100
+
+
+def _confine_draw(salt: str, item) -> int:
+    """A stable 0-99 for a foreign item, from a hash rather than an rng.
+
+    🛑 WHY A HASH AND NOT `world.random`. This is read from inside a LOCATION'S `item_rule`, which
+    Archipelago calls an unbounded number of times per item -- once per candidate location, again on
+    every swap in `remaining_fill`, again during accessibility corrections. An rng draw there would
+    return a different answer on each call (so a name would be confined for one location and free
+    for the next, which is not a share of anything), and it would consume the seed's rng stream a
+    different number of times depending on how hard fill had to work -- the exact failure
+    [[er-fill-slot-data-is-called-more-than-once]] describes. A hash is pure, so the answer is fixed
+    for the whole generation and the stream is untouched.
+
+    Keyed on (salt, owning player, item NAME): per-name, matching `filler_foreign_pct`'s documented
+    "propensity by distinct item name, not a per-copy rule". The salt carries the multiworld seed and
+    OUR player number, so two Elden Ring slots in the same seed confine different names -- otherwise
+    every ER world in a multiworld would agree, and a foreign item barred from one would be barred
+    from all of them, which is a much harder rule than the percentage claims."""
+    key = "%s|%s|%s" % (salt, getattr(item, "player", 0), getattr(item, "name", ""))
+    digest = hashlib.blake2b(key.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % 100
+
+
+def _confine_salt(world) -> str:
+    """Deterministic per (seed, player). Reads the seed rather than drawing from `world.random`, so
+    installing this predicate cannot shift the rng stream for anything downstream of it -- which is
+    what keeps the 100 default byte-identical to the toggle it replaced."""
+    mw = getattr(world, "multiworld", None)
+    return "%s|%s" % (getattr(mw, "seed", 0), getattr(world, "player", 0))
+
+
+def foreign_bar_for(world):
+    """The predicate `core._add_locations` (and the finale's hand-built copy) install on every
+    NON-surface location: `not foreign_bar_for(world)(item, player)`.
+
+    At 100 this is `foreign_advancement_barred` itself -- the same object, so the shipped default
+    runs the same code path it always did. Below 100 it is a share: still only ever foreign
+    advancement, and of that, only the names whose draw falls under the percentage."""
+    from .multiworld_scope import is_surface, foreign_item_barred
+    if is_surface(world):
+        # multiworld_scope: surface (#1612) widens the bar from foreign ADVANCEMENT to every
+        # foreign item; confine is forced to 100 there, so the rule reaches every non-surface check.
+        return foreign_item_barred
+    pct = confine_pct(world)
+    if pct >= 100:
+        return foreign_advancement_barred
+    if pct <= 0:
+        # Nothing is confined. Returning a constant-False predicate rather than None keeps core's
+        # call shape identical; core also stops installing the rule at all (see confined_surface_ids
+        # returning None), so this is belt and braces.
+        return lambda item, player: False
+    salt = _confine_salt(world)
+    def _barred(item, player, _salt=salt, _pct=pct):
+        if not foreign_advancement_barred(item, player):
+            return False
+        return _confine_draw(_salt, item) < _pct
+    return _barred
+
+
+def released_locks(items, pct, rng):
+    """The Region Lock items that SKIP the surface and go to the normal multiworld fill.
+
+    Pure over item-likes with `.name` plus an `rng` with `.sample` (pass `world.random`, never the
+    module `random` -- a seed must reproduce). Only Locks are eligible here. Great Runes and keys
+    travel by a separate draw: the cross-game share at a multi-game table (#811), or
+    `released_non_locks` at the same percentage at an Elden-Ring-only one.
+
+    Rounding is `(n*pct + 50) // 100`, half up, in integers. Python's `round()` is banker's rounding
+    (`round(0.5) == 0`), so a 50% setting on a 1-Lock seed would release NOTHING and read as the
+    feature being broken on exactly the seeds small enough for a player to check by hand.
+
+    The endpoints are exact by construction, not by rounding: 0 releases none, 100 releases all.
+    """
+    locks = [it for it in items if lock_region_name(getattr(it, "name", "")) is not None]
+    if pct <= 0 or not locks:
+        return []
+    if pct >= 100:
+        return list(locks)
+    k = (len(locks) * pct + 50) // 100
+    if k <= 0:
+        return []
+    if k >= len(locks):
+        return list(locks)
+    return rng.sample(locks, k)
+
+
+def released_non_locks(items, pct, rng):
+    """The NON-Lock restricted items (Great Runes, keys) that travel between Elden Ring worlds at an
+    Elden-Ring-only table. Same share and rounding as `released_locks`: `pct` is `100 - progression_bias`.
+
+    Maggo, 2026-10-14: `cross_game_share` is 0 whenever the table holds one GAME, so at a 3-ER table
+    #811's "non-Locks travel too" never switched on and every Great Rune stayed on its owner's
+    surface -- the gap KanagiER worked around with `non_local_items: [Everything]`. Between ER worlds
+    there is no partner-tolerance risk (we own every surface involved), so the cross-game opt-in is
+    the wrong gate here; `progression_bias` -- "how hard is my progression pulled home" -- is the
+    right one. Pure; pass `world.random`."""
+    rest = [it for it in items if lock_region_name(getattr(it, "name", "")) is None]
+    if pct <= 0 or not rest:
+        return []
+    if pct >= 100:
+        return list(rest)
+    k = (len(rest) * pct + 50) // 100
+    if k <= 0:
+        return []
+    if k >= len(rest):
+        return list(rest)
+    return rng.sample(rest, k)
+
+
+def _other_er_players(world) -> int:
+    """How many OTHER real players at this table run this world's game (item-link groups excluded)."""
+    mw = getattr(world, "multiworld", None)
+    worlds = getattr(mw, "worlds", {}) or {}
+    return sum(1 for p in getattr(mw, "player_ids", ()) or ()
+               if p != world.player and getattr(worlds.get(p), "game", None) == world.game)
+
+
+def lock_region_name(item_name):
+    """'Limgrave Lock' -> 'Limgrave'; None for a non-lock name. Pure."""
+    s = str(item_name)
+    return s[:-len(" Lock")] if s.endswith(" Lock") else None
+
+
+def regions_with_major_boss(region_names, tags_map=None, locations=None, barred=None):
+    """Subset of `region_names` that HOST at least one MajorBoss location -- the regions eligible to be
+    the strict sphere-0 anchor. Pure over the generated LOCATION_TAGS + LOCATIONS maps (defaults to the
+    module globals). Empty if tags aren't generated yet (caller then falls back to any region).
+
+    `barred` (the caller's _world_barred_aps) is subtracted, because HOSTING is the question being
+    asked and a barred check cannot host. Deeproot Depths is the case that made this matter: its only
+    MajorBoss check is the Fortissax reward, which is questline-missable, so counting it made the
+    region look eligible on the strength of a check no Lock can ever land on."""
+    tm = LOCATION_TAGS if tags_map is None else tags_map
+    if locations is None:
+        try:
+            from ..tables.data import LOCATIONS as locations
+        except Exception:
+            locations = {}
+    locs = locations
+    bar = frozenset(barred or ())
+    out = set()
+    for r in region_names:
+        for (_n, ap, _f) in locs.get(r, []):
+            if ap not in bar and "MajorBoss" in (tm.get(ap) or ()):
+                out.add(r)
+                break
+    return out
+
+
+# ---- AP glue --------------------------------------------------------------------------------------
+def _selection(world):
+    """The classes this world's surface is built from. ONE resolution, read by BOTH apply() (where the
+    locks go) and slot_data() (what the client stars). If those two ever computed the surface
+    differently we would be back to two lists disagreeing -- which is the bug big-ticket was."""
+    opt = getattr(world.options, "progression_surface", None)
+    return opt.value if opt is not None else None
+
+
+def confined_surface_ids(world):
+    """The ap-ids of THIS world that MAY host foreign progression, when confine_foreign_progression is
+    on -- i.e. the selected surface. Core bars other players' advancement on every own location whose
+    ap-id is NOT in this set, confining foreign progression to the same checks the own region Locks use.
+    Returns None when the feature is inactive (option off, surface mode off, empty surface, or tags not
+    generated), meaning 'apply no foreign bar'. Uses the SAME surface resolution as apply()/slot_data(),
+    so where foreign progression may land and where own progression is placed can never disagree."""
+    from .bingo import active, square_ids
+    if active(world):
+        return square_ids(world)
+    if confine_pct(world) <= 0 or not LOCATION_TAGS:
+        return None
+    classes = selected_surface(_selection(world))
+    if not classes:
+        return None
+    return surface_ap_ids(world, classes)
+
+
+def cross_game_share(world, n_games: int) -> int:
+    """Percent of a world's travelling Locks that may land in a non-ER game. Pure over the option
+    value and the game count.
+
+    `auto` (-1) resolves to **1/n_games** as a percentage -- 2 games is 50, 4 is 25 -- which is the
+    same 1/N rule the export-volume side is judged by. Absent option, solo, or a single game means
+    0: there is nowhere else to send.
+    """
+    if n_games <= 1:
+        return 0
+    opt = getattr(getattr(world, "options", None), "cross_game_progression", None)
+    if opt is None:
+        return 0                      # older yaml -> behave as before this option existed
+    v = int(opt.value)
+    if v < 0:
+        # auto (-1) AND aggregate (-2) both resolve to the 1/N percent. For aggregate it is the
+        # batch size; for auto the balanced pass supplies its own per-game quotas and only needs
+        # this to be POSITIVE so travelling_progression includes the non-Lock tier (#811).
+        # HALF-UP, not `round`: Python rounds .5 to even, so a four-game seed would get
+        # 100/8 = 12.5 -> 12 while the export-volume side's 1/N cap says 13. A silent one-point
+        # disagreement between the two halves of #703 is exactly the class of bug this repo has
+        # paid for twice, and `released_locks` already rounds half-up for the same reason.
+        return max(0, min(100, (100 + n_games // 2) // n_games))
+    return max(0, min(100, v))
+
+
+def _released_pct(world) -> int:
+    """What share of this world's Region Locks go into the multiworld pool, i.e. `100 - bias`.
+
+    Falls back to 0 (release nothing, the pre-option behaviour) when the option is absent -- an older
+    yaml or a stubbed world must not silently start releasing. Note that is the opposite endpoint
+    from the option's own default of 0 BIAS: absent means "behave as before", not "behave as default".
+    """
+    mw = getattr(world, "multiworld", None)
+    if mw is not None and len(getattr(mw, "player_ids", ())) <= 1:
+        return 0
+    opt = getattr(getattr(world, "options", None), "progression_bias", None)
+    if opt is None:
+        return 0
+    return 100 - int(opt.value)
+
+
+def travelling_progression(items, released, cross_share):
+    """The exact item objects handed from `apply()` to the stage-wide placement pass.
+
+    Released Region Locks always travel, preserving `progression_bias`. With a non-zero
+    `cross_game_progression` share, every other restricted advancement item travels too so required
+    Great Runes and legacy keys are actually candidates for that share (#811). At zero, non-Locks
+    keep the pre-#811 local-surface behaviour.
+    """
+    out = list(released)
+    if cross_share <= 0:
+        return out
+    seen = {id(it) for it in out}
+    # Only NON-Lock restricted items travel under cross_share ("every OTHER restricted advancement
+    # item", per this docstring and #811). A Lock that progression_bias did NOT release stays home.
+    # Extending with every item -- Locks included -- silently overrode the reservation: a bias-100
+    # seed still sent 14 of its 17 Locks abroad because cross_game_progression re-added them here
+    # (ZeeK, seed 66131970066820771725; gen log "0 Lock(s) RELEASED" then "17/17 ... 14 abroad").
+    out.extend(
+        it for it in items
+        if id(it) not in seen and lock_region_name(getattr(it, "name", "")) is None
+    )
+    return out
+
+
+def _early_declared(world):
+    """{item name: count} this player declared to `early_items` + `local_early_items`."""
+    out = {}
+    for attr in ("early_items", "local_early_items"):
+        for name, n in ((getattr(world.multiworld, attr, None) or {}).get(world.player, {})).items():
+            if n:
+                out[name] = out.get(name, 0) + n
+    return out
+
+
+def _non_local_names(world):
+    """Item names the player declared `non_local_items` -- already group-expanded by AP, so
+    `Everything` arrives as every item name, and already empty in a solo seed (Main clears it).
+
+    🛑 These are NEVER confined to an Elden Ring surface. Confinement means "only on this world's
+    checks"; non_local means "never on this world's checks". The intersection is empty, so every
+    pass that confined one used to raise -- KanagiER, 2026-10-14: `non_local_items: [Everything]`
+    plus any surface failed with "cannot place 16 restricted-own-progression item(s)", and an EMPTY
+    surface failed the same way in the released pass. Left in the pool, the general fill places them
+    abroad under AP's own forbid rule, which is what the player asked for."""
+    opt = getattr(getattr(world, "options", None), "non_local_items", None)
+    return frozenset(getattr(opt, "value", ()) or ())
+
+
+def check_non_local_capacity(world) -> None:
+    """Refuse up front when `non_local_items` asks for more of this world's items to leave than the
+    rest of the multiworld has open locations for.
+
+    The forbid rule makes every non-local item a demand on ANOTHER player's checks, filler included.
+    `Everything` on an Elden Ring slot is ~3,500 items; a partner game with a few hundred checks
+    cannot host them, and AP's own refusal ("No more spots to place 3542 items") names neither the
+    option nor the fix. This is a NECESSARY bound, not a sufficient one -- the partners' own
+    local/keep rules can still make a smaller request infeasible, and AP's fill reports that."""
+    non_local = _non_local_names(world)
+    if not non_local:
+        return
+    mw = world.multiworld
+    leaving = sum(1 for it in mw.itempool if it.player == world.player and it.name in non_local)
+    room = len(_foreign_open_locations(mw, {world.player}))
+    if leaving > room:
+        raise OptionError(
+            "non_local_items sends %d of this Elden Ring world's items to other players, but the "
+            "rest of the multiworld has only %d open location(s) to hold them. Remove 'Everything' "
+            "(or the large groups) from non_local_items -- to push items abroad, use "
+            "filler_foreign_pct and progression_sharing instead." % (leaving, room))
+
+
+def _restricted_items(world):
+    """The restricted items `apply()` confines through the ladder, minus anything declared early
+    and anything the player declared non-local.
+
+    Early-declared ones (Unlock: Roll whenever Roll is locked, the forced early attack of #1035) are
+    `place_early_on_surface`'s: they need a START-REACHABLE surface host, which the ladder does not
+    look for, and they must not travel. Non-local ones belong to the general fill (`_non_local_names`)."""
+    early = _early_declared(world)
+    non_local = _non_local_names(world)
+    return [it for it in world.multiworld.itempool
+            if is_restricted_progression(it, world.player) and it.name not in early
+            and it.name not in non_local]
+
+
+def place_early_on_surface(world, allowed):
+    """Put each early-declared restricted item on the first host in `allowed` (tier order) that is
+    reachable from the START state, and withdraw its `early_items` declaration. Returns the names
+    placed; removes the used hosts from `allowed`.
+
+    Alaric, 2026-10-06: Roll belongs in the intersection of the early spheres and the surface. AP's
+    `distribute_early_items` would honour "early" but scatter it anywhere (colombius found Roll in a
+    shop); confining it through the ladder would honour the surface but not "early".
+
+    🛑 THE DECLARATION IS WITHDRAWN ONLY FOR WHAT WE PLACED. `distribute_early_items` runs after
+    pre_fill and only places what is still in the pool, so a placed item left declared just logs a
+    shortfall; an unplaced one keeps its declaration and its pool copy, and AP's early fill still
+    guarantees it -- early wins over surface when the start sphere has no surface host. Same start
+    state AP's early fill uses: precollected items plus event locations, nothing from the pool."""
+    mw = world.multiworld
+    declared = _early_declared(world)
+    # A non-local early item is left to AP's early fill, which honours both declarations; a
+    # place_locked_item here would bypass the non-local forbid rule and put it at home.
+    non_local = _non_local_names(world)
+    items = [it for it in mw.itempool
+             if is_restricted_progression(it, world.player) and it.name in declared
+             and it.name not in non_local]
+    if not items:
+        return []
+    state = mw.state.copy()
+    state.sweep_for_advancements(
+        locations=[loc for loc in mw.get_filled_locations() if loc.address is None])
+    placed, missed = [], []
+    for item in items:
+        host = next((loc for loc in allowed
+                     if loc.can_reach(state) and loc.can_fill(state, item, True)), None)
+        if host is None:
+            missed.append(item.name)
+            continue
+        mw.itempool.remove(item)
+        host.place_locked_item(item)
+        allowed.remove(host)
+        placed.append(item.name)
+        for attr in ("early_items", "local_early_items"):
+            table = (getattr(mw, attr, None) or {}).get(world.player)
+            if table and table.get(item.name):
+                table[item.name] -= 1
+                if not table[item.name]:
+                    del table[item.name]
+                break
+    import logging
+    logging.getLogger("Greenfield").info(
+        "[greenfield] progression surface: %d early item(s) on start-reachable surface hosts%s; "
+        "%d left to AP's early fill%s",
+        len(placed), (": " + ", ".join(placed)) if placed else "",
+        len(missed), (" (no start-reachable surface host): " + ", ".join(missed)) if missed else "")
+    return placed
+
+
+def missable_barred_aps(world):
+    """The missable checks that may not host progression, or empty when the guard is off.
+
+    WHY THIS JOINED THE SURFACE MATH (2026-07-28). features/missable_locations enforces its bar with
+    an item_rule, and the surface never knew about it -- so `allowed_ap_ids` counted checks that
+    cannot accept an advancement item, and the surface SIZE was a claim about tags rather than about
+    hosting. Mostly that is a cosmetic overcount. It stopped being cosmetic when the Fortissax reward
+    was tagged: `Deeproot Depths` has exactly ONE surface member and that is it, so the surface said
+    the region could host a Lock while the true count was zero -- and `regions_with_major_boss`, which
+    decides strict-mode sphere-0 anchor eligibility, said the same thing off the same tags.
+
+    Gated on the option, because turning `protect_missable_locations` OFF is a deliberate choice to
+    accept questline requirements ("expert / guaranteed-access play") -- and then these checks really
+    can host progression, so the surface should count them again."""
+    opt = getattr(getattr(world, "options", None), "protect_missable_locations", None)
+    if opt is not None and not opt.value:
+        return frozenset()
+    try:
+        from ..tables.missable_locations import MISSABLE_LOCATIONS
+    except Exception:
+        return frozenset()
+    return frozenset(MISSABLE_LOCATIONS)
+
+
+def collapsed_site_regions(world):
+    """#701 OPTION B -- {ap_id: region} for every hub-COLLAPSED merchant row THIS SEED CAN PLACE.
+
+    A row whose seller stands in more than one region (Patches/Thiollier: Limgrave, Mt. Gelmir,
+    Cerulean; the Dragon Communion altars: Caelid, Limgrave) is pinned to no region by gen_data, falls
+    onto the always-open hub, and option C (PR #706) bars it from carrying progression for exactly the
+    reason Cokeman5 hit: the hub is always kept, so "any of three regions" had become "no requirement
+    at all". Option B gives the row a real region instead -- the EARLIEST of its own sites that this
+    seed KEPT, in region_spine.SPINE order -- so it can carry progression again, gated behind that
+    region's Lock (core._add_locations puts the gate on the location's access_rule).
+
+    ⭐ WHY EARLIEST-KEPT IS SAFE AND NOT MERELY CONVENIENT. The honest rule is a DISJUNCTION: reachable
+    if the player holds ANY site. Requiring one NAMED site is STRICTER than that disjunction, so the
+    approximation can only ever refuse a placement the player could have reached -- never the reverse,
+    which is the direction that strands a seed. It is EXACT when the seed kept exactly one site. The
+    real disjunction is #701 option 1 and still needs #320/#502's machinery; it is not this.
+
+    🛑 OPTION B COMPOSES WITH OPTION C, IT DOES NOT REPLACE IT. A row with NO kept site is absent from
+    this map, stays in DEFAULTED_REGION_APS, and keeps C's bar -- C's behaviour is B's FALLBACK. A
+    `num_regions` draw that keeps none of {Limgrave, Mt. Gelmir, Cerulean} is a legitimate seed, so
+    refusing to generate it would be the regression; B NARROWS C's bar to the case where it is still
+    true. Both halves are asserted in tests/test_gf_hub_collapsed_merchant_sites.py.
+
+    Cached on the world: called from core._add_locations (once per region) and from the surface math,
+    which must give the same answer or the item_rule and the advertised surface drift apart."""
+    cached = getattr(world, "_gf_collapsed_site_regions", None)
+    if cached is not None:
+        return cached
+    try:
+        from ..tables.location_tags import HUB_COLLAPSED_SITE_APS as _sites
+    except Exception:                                   # pre-regen data -> feature inert, C's bar stands
+        _sites = {}
+    out = {}
+    if _sites:
+        from ..region_spine import earliest_kept_site
+        kept = set(getattr(world, "gf_kept", ()) or ())
+        for ap, sites in _sites.items():
+            site = earliest_kept_site(sites, kept)
+            if site is not None:
+                out[int(ap)] = site
+    try:
+        world._gf_collapsed_site_regions = out
+    except Exception:                                   # not a real world (pure callers) -> no cache
+        pass
+    return out
+
+
+def collapsed_lift_aps(world):
+    """The ap ids whose DEFAULTED bar option B lifts in this seed -- and ONLY that bar.
+
+    🛑 ONE CAUSE AT A TIME. `core._NO_PROGRESSION_APS` is a UNION of three independent reasons, and a
+    row can hold more than one: two of the 16 Patches rows (7774847/7774848) are ALSO
+    SHOP_RELEASE_GATED (the merchant does not stock them until an unlock fires), and the region being
+    open says nothing about the shelf. Subtracting an ap from the union would lift every reason at
+    once, so the ones another rule still bars are removed here -- in the ONE place both the item_rule
+    and the surface math read, so the two cannot disagree about which rows moved."""
+    ids = frozenset(collapsed_site_regions(world))
+    if not ids:
+        return frozenset()
+    try:
+        from ..tables.location_tags import ERDTREE_BURN_APS as _b
+    except Exception:
+        _b = frozenset()
+    try:
+        from ..tables.location_tags import SHOP_RELEASE_GATED_APS as _g
+    except Exception:
+        _g = frozenset()
+    return ids - frozenset(_b) - frozenset(_g)
+
+
+def _world_barred_aps(world):
+    """The per-world no-progression set for surface math: DEFAULTED_REGION_APS always; the missable
+    set while its guard is armed (missable_barred_aps); the ERDTREE_BURN_APS burn-strand bar only
+    while the capital reconciler is NOT armed (armed = the client restores m11_00, so the strand those
+    APs were barred for cannot happen -- SPEC-capital-reconciler.md). Mirrors core._add_locations'
+    item_rule carve-out; the two must agree or the surface would star checks the item_rule forbids
+    (or vice versa) -- which is exactly what it did for every missable check until 2026-07-28."""
+    try:
+        from ..tables.location_tags import DEFAULTED_REGION_APS as _d
+    except Exception:
+        _d = frozenset()
+    try:
+        from ..tables.location_tags import HUB_UNATTRIBUTED_APS as _u
+    except Exception:
+        _u = frozenset()
+    try:
+        from ..tables.location_tags import SHOP_RELEASE_GATED_APS as _s
+    except Exception:
+        _s = frozenset()
+    # #701 option B: a hub-collapsed merchant row THIS SEED could region to a kept site is no longer a
+    # guess -- it is gated behind that region (core._add_locations' access_rule), so it comes OFF the
+    # defaulted bar here as well. Subtracted from `_d` alone and never from the union below: the lift
+    # answers the GUESSED-REGION cause only, and `collapsed_lift_aps` has already dropped the rows some
+    # other rule still bars. Rows with no kept site are not in the lift and keep option C's bar.
+    _d = frozenset(_d) - collapsed_lift_aps(world)
+    _m = missable_barred_aps(world)
+    # v0.6: surface math and the location item_rule consume the same evidence policy. Otherwise the
+    # tracker can star (or the ladder can select) a check that fill is forbidden to use.
+    from . import evidence_progression_hosts as _eph
+    _h = _eph.hold_aps(world)
+    if getattr(world, "gf_capital_reconciler", False):
+        return frozenset(_d) | frozenset(_u) | frozenset(_s) | _m | _h
+    try:
+        from ..tables.location_tags import ERDTREE_BURN_APS as _b
+    except Exception:
+        _b = frozenset()
+    return frozenset(_d) | frozenset(_u) | frozenset(_b) | frozenset(_s) | _m | _h
+
+
+def _open_allowed(world, classes):
+    """Open, TRUSTED locations whose tags put them on the requested surface rung."""
+    ids = surface_ap_ids(world, classes) & _trusted_host_aps()
+    out = []
+    for loc in world.multiworld.get_locations(world.player):
+        ap = getattr(loc, "address", None)
+        if ap is not None and ap in ids and loc.item is None:
+            out.append(loc)
+    return out
+
+
+def _trusted_host_aps():
+    """The corroborated and directly adjudicated allow-list; absent data admits nothing.
+
+    Fail-closed here is intentional.  This path moves required items.  Treating a missing generated
+    module as "everything is trusted" would turn a stale/incomplete release build into a silent
+    policy bypass.
+    """
+    try:
+        from .evidence_progression_hosts import trusted_aps
+    except ImportError:
+        return frozenset()
+    return trusted_aps()
+
+
+def _open_trusted(world):
+    """Final widening rung: every enabled trusted check, regardless of surface tag."""
+    trusted = _trusted_host_aps()
+    return [loc for loc in world.multiworld.get_locations(world.player)
+            if getattr(loc, "address", None) in trusted and loc.item is None]
+
+
+def _place(world, allowed, to_place, lock):
+    """One fill_restrictive pass. Base state = get_all_state(False) (the base-state fix): the rest of
+    the pool + precollected + already-placed locks count as available, so gated majors look reachable.
+    fill_restrictive mutates to_place in place, leaving only the UNPLACED items.
+
+    ACCESS-CHECK FIX (2026-07-24): fill_restrictive only enforces per-item reachability while the game
+    is NOT yet beatable in its max-exploration state. Under accessibility:minimal it computes
+    ``perform_access_check = not has_beaten_game(maximum_exploration_state)`` -- and that max-exploration
+    state re-collects the ENTIRE item_pool (every gate key we are placing), so the goal is ALWAYS
+    "beaten" during our pre-fill => the check switches OFF => fill_restrictive stops verifying
+    reachability and LOCKS our gate keys into whatever slots remain, including regions sealed behind
+    OTHER gate keys. In vanilla-progression mode the full vanilla dependency graph (deep compound / count
+    chokepoints, ~30 keys) makes that a routine multi-region cycle -> keys stranded behind their own
+    gates -> audit_reachable's unrescuable FillError. We WANT our own spine fully reachable regardless of
+    the player's accessibility (that is the entire point of the surface + the audit), so force the check
+    ON for the duration of OUR placement by lifting accessibility off minimal, then restore it. Verified
+    a no-op for the region-lock spine (its DAG already placed reachably) and the fix for vanilla mode
+    (0 spill / 0 rescue where the strand was ~30 keys). The restore is in ``finally`` so a fill raise
+    can't leak the override; placement is synchronous and single-threaded per world, so no race."""
+    import inspect
+    from Fill import fill_restrictive
+    mw = world.multiworld
+    state = mw.get_all_state(False)
+    # Build kwargs by SIGNATURE, not a try/except-TypeError fallback: the old fallback dropped BOTH
+    # `lock` and `allow_partial`, so on an AP without allow_partial a strict lock would silently go
+    # unlocked (progression-balancing could then move it off the surface) AND, now that we force the
+    # access check on below, an over-full surface would raise FillError instead of spilling -- breaking
+    # the ladder's "never FillErrors" contract. Gating on the signature keeps `lock` unconditional and
+    # only omits allow_partial when the running AP truly lacks it. (Fable review 2026-07-24.)
+    kwargs = {"single_player_placement": True, "lock": lock}
+    if "allow_partial" in inspect.signature(fill_restrictive).parameters:
+        kwargs["allow_partial"] = True
+    acc = getattr(world.options, "accessibility", None)
+    saved = acc.value if acc is not None else None
+    try:
+        if acc is not None:
+            acc.value = 0  # Accessibility.option_full -> perform_access_check stays True in fill_restrictive
+        fill_restrictive(mw, state, allowed, to_place, **kwargs)
+    finally:
+        if acc is not None:
+            acc.value = saved
+
+
+def apply(world) -> None:
+    """core.pre_fill hook. Confine this world's own progression to the selected surface; widen via
+    the tag ladder and finally every enabled TRUSTED check. Refuse if no trusted matching exists.
+
+    Always strict since progression_surface_mode was retired -- the soft (mark-and-spill) and off
+    regimes were unreachable from any yaml for two releases before they were deleted."""
+    from .bingo import active, square_ids
+    if active(world):
+        # General restrictive fill enforces each square's objective prerequisites. Do not
+        # move items through the ordinary surface's exemptions or widening ladder.
+        mw = world.multiworld
+        n = sum(item.advancement for item in mw.itempool)
+        capacity = sum(not active(mw.worlds[loc.player]) or
+                       loc.address in square_ids(mw.worlds[loc.player])
+                       for loc in mw.get_unfilled_locations())
+        if n > capacity:
+            raise OptionError(f"bingo_mode reward capacity is {capacity} locations but the pool has {n} "
+                              "progression items; reduce bingo_region_limit or required unlocks, or add ordinary slots")
+        return
+    check_non_local_capacity(world)
+    if not LOCATION_TAGS:
+        return
+    surface = selected_surface(_selection(world))
+    mw = world.multiworld
+    to_place = _restricted_items(world)
+    if not to_place and not any(is_restricted_progression(it, world.player)
+                                and it.name in _early_declared(world) for it in mw.itempool):
+        return
+    try:
+        import Fill  # noqa: F401  -- ensure the fill API exists before we disturb the pool
+    except Exception:
+        return
+    # RELEASE (er-archipelago#491). A released Lock is simply never taken out of the itempool, so
+    # the normal multiworld fill places it -- which is the only way one can reach another player's
+    # world. Measured before this existed: 0 spill in 146 world-instances and 0 of 105 Locks foreign
+    # in 8 two-player seeds, because the surface hosts ~170 checks against a ceiling of 36 restricted
+    # items. The valve existed; nothing ever came through it.
+    #
+    # 🛑 The draw happens BEFORE the removal loop and ONCE, recorded on `world`. Drawing it later
+    # would mean re-deciding per caller, and an inline rng draw that runs a different number of times
+    # in different code paths splits the seed.
+    released = released_locks(to_place, _released_pct(world), world.random)
+    n_games = len({w.game for w in getattr(mw, "worlds", {}).values()}) or 1
+    cross_share = cross_game_share(world, n_games)
+    # No special numerator step for balanced mode: `balance_active` requires AUTO, auto resolves to
+    # a positive share, and any positive share already makes travelling_progression include every
+    # non-Lock restricted item (#811). An explicit `cross_game_progression` value -- 0 included --
+    # keeps its declared meaning and the balanced shape stands down (see balance_active).
+    travelling = travelling_progression(to_place, released, cross_share)
+    if cross_share <= 0 and _other_er_players(world):
+        # Drawn AFTER the Lock draw so the Lock draw itself is unchanged by this pass existing.
+        travelling = travelling + released_non_locks(to_place, _released_pct(world), world.random)
+    if travelling:
+        _rel = {id(it) for it in travelling}
+        to_place = [it for it in to_place if id(it) not in _rel]
+    world.gf_locks_released = sorted(it.name for it in released)
+    # The handle `stage_fill_hook` reads. The ITEMS, not the names: it has to remove these exact
+    # objects from the pool and hand them to fill_restrictive.
+    world.gf_released_lock_items = list(released)
+    world.gf_released_progression_items = list(travelling)
+    if not surface:
+        # An EMPTY surface means "do not confine my own progression" (it scatters), NOT "skip the
+        # multiworld allocation". This used to return before the release above was recorded, so
+        # `progression_surface: []` -- what the wizard writes for "I do not care where" -- silently
+        # switched off the whole cross-game pass: every Lock went through ordinary fill and stayed
+        # home (255, seed 19945568586154303638). The travelling share is still handed to
+        # `place_released_locks`; only the confinement of the rest is skipped.
+        import logging
+        logging.getLogger("Greenfield").info(
+            "[greenfield] progression surface: EMPTY selection -- own progression is not confined; "
+            "%d Lock(s) RELEASED and %d item(s) travelling to the multiworld pass",
+            len(world.gf_locks_released), len(travelling))
+        return
+    n0 = len(to_place)
+    trusted_capacity = len(_open_trusted(world))
+    for it in to_place:
+        mw.itempool.remove(it)
+    strict = True   # the only regime; see ProgressionSurfaceMode's retirement note
+    rungs = build_ladder(surface)
+    resolved = rungs[-1] if rungs else list(surface)
+    # Match the complete trusted assignment in ONE pass. Sequential tag rungs can lock an early
+    # item onto the only location compatible with a later region Lock; a later all-trusted pass then
+    # cannot swap against that already-locked placement and reports a false capacity shortage.
+    # Ordering still expresses preference: shuffled configured/ladder locations first, every other
+    # enabled TRUSTED location second. fill_restrictive can swap across the full union.
+    #
+    # 🛑 TIERED, NOT ONE FLAT "PREFERRED" BUCKET (colombius, 2026-10-06). `preferred` used to be the
+    # LAST rung -- every widen group -- shuffled together, and the bootstrap plan below picked hosts
+    # by competition alone, ignoring even that order. A full-map `[Boss]` seed with ~166 boss hosts
+    # put 36 of its 43 confined items on Legendary/Seedtree/fallback checks, merchants included.
+    # Tier 0 is the player's own selection, tier k the k-th widen rung, the last tier the trusted
+    # fallback; the list is in tier order (first-fit in fill_restrictive) and the plan ranks by tier
+    # before competition, so a wider tier is used only where the narrower one has no reachable host.
+    tier = {}
+    for rank, rung in enumerate(rungs or [list(surface)]):
+        for loc in _open_allowed(world, rung):
+            tier.setdefault(id(loc), rank)
+    fallback_tier = len(rungs or [surface])
+    for loc in _open_trusted(world):
+        tier.setdefault(id(loc), fallback_tier)
+    preferred = _open_allowed(world, resolved)
+    preferred_ids = {id(loc) for loc in preferred}
+    fallback = [loc for loc in _open_trusted(world) if id(loc) not in preferred_ids]
+    placed_item_ids = {id(it) for it in to_place}
+    allowed = preferred + fallback
+    world.random.shuffle(allowed)
+    allowed.sort(key=lambda loc: tier[id(loc)])   # stable: shuffled within a tier
+
+    # Bootstrap confined progression one item at a time against the ACTUAL reachable state. AP's batch
+    # fill_restrictive deliberately computes reachability with every still-unplaced item swept in;
+    # for mutually gating Region Locks that can manufacture a cycle even when a valid trusted start
+    # anchor exists. Pick the item that opens the most remaining trusted checks, put it on a check
+    # reachable before receiving it, collect it into the placement state, and repeat. Including quest
+    # keys matters: some DLC routes need a key and a Region Lock before the next trusted host opens.
+    world.gf_prog_surface_early = place_early_on_surface(world, allowed)
+    state = mw.get_all_state(False)
+    bootstrap_items = list(to_place)
+    # Final tiebreak for the plan below is this seeded shuffle, NOT the location name: ties on
+    # tier+competition are common (a boss host fits nearly every confined item), and a name
+    # tiebreak put every seed's Great Runes on the alphabetically first hosts (Ainsel, Altus, ...).
+    shuffled_rank = {id(loc): rank for rank, loc in enumerate(allowed)}
+
+    def progression_plan(current_state, remaining_items, remaining_locations):
+        """Build a reachable prefix without exponential assignment search.
+
+        The normal restrictive fill remains responsible for the complete matching. This prefix only
+        breaks the false all-items-swept-in cycle by collecting one genuinely reachable item at a
+        time. Prefer the item that opens the most trusted hosts, then consume the location useful to
+        the fewest other remaining items so scarce hosts survive for normal fill.
+        """
+        if len(remaining_items) <= 12:
+            failed = set()
+
+            def exact_plan(state, items, locations):
+                if not items:
+                    return []
+                # The collected state is determined by which bootstrap items remain. Location
+                # rules may distinguish otherwise-equivalent hosts, so retain their addresses too.
+                # Caching dead subproblems turns the small exact search from factorial repetition
+                # into a bounded subset search.
+                key = (frozenset(id(item) for item in items),
+                       frozenset(id(location) for location in locations))
+                if key in failed:
+                    return []
+                candidates = []
+                for item in items:
+                    spots = [loc for loc in locations if loc.can_fill(state, item, True)]
+                    if not spots:
+                        continue
+                    opened = state.copy()
+                    opened.collect(item, True)
+                    score = sum(loc.can_reach(opened) for loc in locations)
+                    candidates.append((len(spots), -score, item.name, item, spots, opened))
+                best = []
+                # Most-constrained item and host first. Opening breadth is the secondary signal;
+                # it cannot override a one-host item and accidentally consume that host.
+                for _count, _negative_score, _name, item, spots, opened in sorted(
+                        candidates, key=lambda row: row[:3]):
+                    def competition(location):
+                        return sum(location.can_fill(state, other, True)
+                                   for other in items if other is not item)
+
+                    for location in sorted(spots, key=lambda loc: (tier[id(loc)], competition(loc),
+                                                                   shuffled_rank[id(loc)])):
+                        tail = exact_plan(
+                            opened, [other for other in items if other is not item],
+                            [other for other in locations if other is not location])
+                        candidate = [(item, location), *tail]
+                        if len(candidate) > len(best):
+                            best = candidate
+                        if len(best) == len(items):
+                            return best
+                failed.add(key)
+                return best
+
+            return exact_plan(current_state, list(remaining_items), list(remaining_locations))
+
+        plan = []
+        remaining_items = list(remaining_items)
+        remaining_locations = list(remaining_locations)
+        while remaining_items:
+            candidates = []
+            for item in remaining_items:
+                spots = [loc for loc in remaining_locations
+                         if loc.can_fill(current_state, item, True)]
+                if not spots:
+                    continue
+                opened = current_state.copy()
+                opened.collect(item, True)
+                newly_reachable = sum(loc.can_reach(opened) for loc in remaining_locations)
+                candidates.append((newly_reachable, item.name, item, spots, opened))
+            if not candidates:
+                break
+            _score, _name, item, spots, opened = max(candidates, key=lambda row: row[:2])
+
+            def competing_items(location):
+                return sum(location.can_fill(current_state, other, True)
+                           for other in remaining_items if other is not item)
+
+            location = min(spots, key=lambda loc: (tier[id(loc)], competing_items(loc),
+                                                  shuffled_rank[id(loc)]))
+            plan.append((item, location))
+            current_state = opened
+            remaining_items.remove(item)
+            remaining_locations.remove(location)
+        return plan
+
+    plan = progression_plan(state, bootstrap_items, allowed)
+    for item, location in plan:
+        location.place_locked_item(item)
+        state.collect(item, True, location)
+        allowed.remove(location)
+        to_place.remove(item)
+
+    _place(world, allowed, to_place, lock=strict)
+    world.gf_prog_surface_trusted_fallback = any(
+        loc.item is not None and id(loc.item) in placed_item_ids and id(loc) not in preferred_ids
+        for loc in fallback)
+    if to_place:
+        # Put the still-unplaced objects back before raising. Generation stops, but keeping pool
+        # accounting intact makes the refusal deterministic and prevents test teardown/leak reports
+        # from obscuring the actual configuration error.
+        for it in to_place:
+            mw.itempool.append(it)
+        enabled_trusted = sum(
+            getattr(loc, "address", None) in _trusted_host_aps()
+            for loc in world.multiworld.get_locations(world.player))
+        names = ", ".join(sorted(it.name for it in to_place))
+        raise OptionError(
+            "progression_surface cannot place %d restricted-own-progression item(s) after "
+            "widening to all %d enabled TRUSTED checks (%d were open before placement); HOLD "
+            "checks are never promoted. Unplaced: %s. Keep more regions or broaden the enabled "
+            "content."
+            % (len(to_place), enabled_trusted, trusted_capacity, names))
+    world.gf_prog_surface_resolved = list(resolved)
+    world.gf_prog_surface_spilled = len(to_place)
+    world.gf_prog_surface_placed = n0 - len(to_place)
+    # WHICH items spilled, not just how many. The count alone has lived in the SPOILER since this
+    # feature landed -- post-hoc, per-seed, and no gate reads it -- so the one path that silently
+    # undoes the confinement was the one path nobody could see. "Tolerance requires telemetry"
+    # (CONTRIBUTING, Runtime visibility): a degrade announces itself, with enough detail to act on.
+    #
+    # 🛑 A SPILL IS NOT A SOFTLOCK, and this log must not be read as one. Winnability is guarded
+    # independently and still holds for a spilled item: core._add_locations bars advancement from ANY
+    # player on DEFAULTED_REGION_APS / ERDTREE_BURN_APS, features/missable_locations does the same on
+    # every missable check, and audit_reachable (post_fill) rescues-or-fails on any own advancement
+    # item that ends up unreachable "whatever minted it". What a spill costs is CURATION: the Lock
+    # lands on some ordinary reachable check -- possibly in ANOTHER player's world, since
+    # local_items deliberately lets region Locks travel -- instead of on a vetted surface check.
+    world.gf_prog_surface_spilled_names = sorted(it.name for it in to_place)
+    # UNCONDITIONAL. It used to log only when something spilled, which made "no spill" and "no
+    # telemetry at all" indistinguishable downstream -- tools/fill_regression could only report the
+    # spill distribution as NOT MEASURED and had to say so. "Armed with N entries" is the house
+    # pattern (CONTRIBUTING, Runtime visibility): a feature states its status every run, and a ZERO
+    # is a measurement, not a silence.
+    import logging
+    # RELEASED is logged beside SPILLED and is NOT the same thing: released Locks were never offered
+    # to the surface (the player asked for that), spilled ones were offered and did not fit (the
+    # surface fell short). Folding them into one number would hide a starved surface behind an
+    # option, which is the failure the spill telemetry was added to prevent in the first place.
+    logging.getLogger("Greenfield").info(
+        "[greenfield] progression surface: %d Lock(s) RELEASED to the multiworld pool "
+        "(progression_bias %d)%s",
+        len(world.gf_locks_released), 100 - _released_pct(world),
+        (": " + ", ".join(world.gf_locks_released)) if world.gf_locks_released else "")
+    logging.getLogger("Greenfield").info(
+        "[greenfield] progression surface: rung %s placed %d/%d; trusted fallback %s; "
+        "%d SPILLED to normal fill%s",
+        resolved, n0 - len(to_place), n0,
+        "used" if world.gf_prog_surface_trusted_fallback else "not needed", len(to_place),
+        (" (curation only -- winnability is guarded elsewhere): "
+         + ", ".join(world.gf_prog_surface_spilled_names)) if to_place else "")
+
+
+def audit_reachable(world) -> None:
+    """post_fill SAFETY NET (F). From a REAL CollectionState (precollected only), verify every own
+    advancement item is actually reachable. Any own advancement item at an unreachable location is a
+    shipped softlock under accessibility:minimal (AP skips its own full-accessibility check there).
+
+    RESCUE-THEN-FAIL: first try to salvage the seed -- swap each stranded item into a reachable,
+    unlocked, filler-holding location of ours (the filler moves to the now-unreachable slot, which is
+    harmless). Reachability only grows as progression moves into reachable slots, so we iterate + re-
+    sweep until stable. Only raise FillError when a stranded item CANNOT be rescued (its placement is
+    locked, or no reachable filler slot remains) -- so a salvageable seed ships instead of dying, and a
+    genuinely unwinnable one fails loudly at generation instead of hours into a playthrough. Catches
+    any residual boss-key/region-lock cycle or stranded rune/legacy key, whatever minted it. FAIL-OPEN
+    on an internal audit error (never block gen on an audit bug)."""
+    try:
+        from BaseClasses import CollectionState
+        from Fill import FillError, swap_location_item
+    except Exception as e:
+        import logging
+        logging.getLogger("Greenfield").warning("audit_reachable: imports failed (%r)", e)
+        return
+
+    mw = world.multiworld
+    player = world.player
+
+    def _detail(locs):
+        return ", ".join(f"{l.item.name} @ {l.name}" for l in locs[:8])
+
+    def _stranded(state, locs):
+        return [l for l in locs if l.item is not None and l.item.player == player
+                and l.item.advancement and not l.can_reach(state)]
+
+    try:
+        my_locs = list(mw.get_locations(player))
+        rescued = 0
+        for _ in range(len(my_locs) + 2):
+            state = CollectionState(mw)
+            state.sweep_for_advancements()
+            stranded = _stranded(state, my_locs)
+            if not stranded:
+                break
+            locked = [l for l in stranded if l.locked]
+            if locked:  # a locked placement can't be moved -> unrescuable
+                raise FillError(f"[greenfield] {len(locked)} own progression item(s) LOCKED & unreachable "
+                                f"after fill -- unrescuable soft-lock; regenerate. First: {_detail(locked)}")
+            _strand_ids = {id(l) for l in stranded}
+            targets = [l for l in my_locs
+                       if not l.locked and l.item is not None and not l.item.advancement
+                       and id(l) not in _strand_ids and l.can_reach(state)]
+            if not targets:
+                raise FillError(f"[greenfield] {len(stranded)} own progression item(s) unreachable and no "
+                                f"reachable filler slot to rescue into; regenerate. First: {_detail(stranded)}")
+            moved = 0
+            for sl in stranded:
+                if not targets:
+                    break
+                swap_location_item(sl, targets.pop())  # stranded prog -> reachable slot; filler -> sl
+                rescued += 1
+                moved += 1
+            if moved == 0:
+                raise FillError(f"[greenfield] {len(stranded)} own progression item(s) unreachable; rescue "
+                                f"made no progress; regenerate. First: {_detail(stranded)}")
+        else:  # loop exhausted without converging
+            state = CollectionState(mw)
+            state.sweep_for_advancements()
+            remaining = _stranded(state, my_locs)
+            if remaining:
+                raise FillError(f"[greenfield] {len(remaining)} own progression item(s) unrescuable after "
+                                f"max iterations; regenerate. First: {_detail(remaining)}")
+        world.gf_prog_surface_rescued = rescued
+    except FillError:
+        raise
+    except Exception as e:  # audit malfunction must never fail an otherwise-good gen
+        import logging
+        logging.getLogger("Greenfield").warning(
+            "progression_surface.audit_reachable skipped (internal error: %r)", e)
+
+
+@register
+class ProgressionSurfaceFeature(Feature):
+    name = "progression_surface"
+    OPTIONS = {"progression_surface": ProgressionSurface,
+               "progression_surface_mode": ProgressionSurfaceMode,
+               "progression_sharing": ProgressionSharing,
+               "progression_bias": ProgressionBias,
+               "confine_foreign_progression": ConfineForeignProgression,
+               "cross_game_progression": CrossGameProgression,
+               "goal_region_unlock_policy": GoalRegionUnlockPolicy}
+    # Placement runs centrally from core.pre_fill via apply() (locations exist + get_all_state valid).
+    # The foreign-progression bar is set in core._add_locations (item_rule), using confined_surface_ids.
+
+    def slot_data(self, world):
+        """Ship the surface to the CLIENT. This is the set the tracker stars.
+
+        🛑 WHAT A STAR MEANS, RELAXED 2026-08-09 (Alaric, er-archipelago#491). It used to mean
+        "your region Locks are somewhere in here", which `progression_bias` retires: at the default
+        of 0 none of your Locks are reserved for YOUR surface, so on a two-slot seed roughly half of
+        them are sitting on somebody else's.
+
+        It still confines real progression, so the honest reading is the weaker one:
+        **these are the locations that can host progression items -- yours or another world's.**
+        `confine_foreign_progression` keeps that share of every OTHER player's advancement on
+        exactly this set, and whatever share of your own Locks you chose to keep curated lands here
+        too. A star is "something important can be here", not "your key is here". 🛑 At a confine
+        share below 100 the star weakens once more: the un-confined share of foreign progression can
+        sit on any reachable check of yours, starred or not.
+
+        It REPLACES `bigTicketLocations`, which was a second list of "important checks" naming a set
+        progression could never reach: big-ticket targeted {MajorBoss, Remembrance, GreatRune} while
+        the surface is {Remembrance, Seedtree, Church, Boss, Fragment, Revered} -- intersection
+        Remembrance alone. The client was starring MajorBoss/GreatRune checks that this module FORBIDS
+        a region Lock from ever occupying. A tracker pointing at checks the locks cannot be on is worse
+        than no tracker: it teaches the player something false.
+
+        Emitting the surface itself makes that drift unrepresentable -- "where progression may be"
+        and "what the client stars" are now one expression, evaluated once.
+        """
+        from .bingo import active, square_ids
+        if active(world):
+            return {contract.PROGRESSION_SURFACE_LOCATIONS: sorted(square_ids(world))}
+        classes = getattr(world, "gf_prog_surface_resolved", None)
+        if classes is None:
+            classes = selected_surface(_selection(world))
+        ids = surface_ap_ids(world, classes)
+        if getattr(world, "gf_prog_surface_trusted_fallback", False):
+            ids |= _trusted_host_aps()
+        own = {loc.address for loc in world.multiworld.get_locations(world.player)
+               if getattr(loc, "address", None) is not None}
+        out = {contract.PROGRESSION_SURFACE_LOCATIONS: sorted(i for i in ids if i in own)}
+        policy = getattr(world.options, "goal_region_unlock_policy", None)
+        if int(getattr(policy, "value", policy or 0)) == GoalRegionUnlockPolicy.option_regions_completed:
+            out[contract.REQUIRES_CLIENT_FEATURES] = [_REGION_COMPLETION_FEATURE]
+        return out

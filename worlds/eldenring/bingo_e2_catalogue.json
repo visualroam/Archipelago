@@ -1,0 +1,1034 @@
+[
+  {
+    "adapter": "roster/red-wolf/1",
+    "family": "roster/red-wolf",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 1 Red Wolf boss",
+    "target": 1,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/red-wolf/2",
+    "family": "roster/red-wolf",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Red Wolf bosses",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/red-wolf/3",
+    "family": "roster/red-wolf",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Red Wolf bosses",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/gargoyle/3",
+    "family": "roster/gargoyle",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different gargoyle or Black Blade Kindred bosses",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/gargoyle/4",
+    "family": "roster/gargoyle",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 different gargoyle or Black Blade Kindred bosses",
+    "target": 4,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/name-god/3",
+    "family": "roster/name-god",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 bosses whose names contain \"God\"",
+    "target": 3
+  },
+  {
+    "adapter": "roster/name-god/4",
+    "family": "roster/name-god",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 bosses whose names contain \"God\"",
+    "target": 4
+  },
+  {
+    "adapter": "roster/magma-wyrm/1",
+    "family": "roster/magma-wyrm",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 1 Magma Wyrm boss",
+    "target": 1
+  },
+  {
+    "adapter": "roster/magma-wyrm/2",
+    "family": "roster/magma-wyrm",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Magma Wyrm bosses",
+    "target": 2
+  },
+  {
+    "adapter": "roster/magma-wyrm/3",
+    "family": "roster/magma-wyrm",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Magma Wyrm bosses",
+    "target": 3
+  },
+  {
+    "adapter": "roster/fallingstar-beast/1",
+    "family": "roster/fallingstar-beast",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 1 Fallingstar Beast",
+    "target": 1
+  },
+  {
+    "adapter": "roster/fallingstar-beast/2",
+    "family": "roster/fallingstar-beast",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Fallingstar Beasts",
+    "target": 2
+  },
+  {
+    "adapter": "roster/omenkiller/1",
+    "family": "roster/omenkiller",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 1 Omenkiller boss",
+    "target": 1
+  },
+  {
+    "adapter": "roster/omenkiller/2",
+    "family": "roster/omenkiller",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Omenkiller bosses",
+    "target": 2
+  },
+  {
+    "adapter": "roster/deathbirds",
+    "family": "roster/deathbirds",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat a Death Rite Bird and two Deathbirds",
+    "target": 3
+  },
+  {
+    "adapter": "roster/cemetery-shade/2",
+    "family": "roster/cemetery-shade",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Cemetery Shades",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/cemetery-shade/3",
+    "family": "roster/cemetery-shade",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Cemetery Shades",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/misbegotten/2",
+    "family": "roster/misbegotten",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Misbegotten bosses",
+    "target": 2
+  },
+  {
+    "adapter": "roster/misbegotten/3",
+    "family": "roster/misbegotten",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Misbegotten bosses",
+    "target": 3
+  },
+  {
+    "adapter": "roster/watchdog/2",
+    "family": "roster/watchdog",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Erdtree Burial Watchdogs",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/watchdog/3",
+    "family": "roster/watchdog",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Erdtree Burial Watchdogs",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/watchdog/4",
+    "family": "roster/watchdog",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 different Erdtree Burial Watchdogs",
+    "target": 4,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/duelist/1",
+    "family": "roster/duelist",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 1 Duelist boss",
+    "target": 1
+  },
+  {
+    "adapter": "roster/duelist/2",
+    "family": "roster/duelist",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Duelist bosses",
+    "target": 2
+  },
+  {
+    "adapter": "roster/black-knife/2",
+    "family": "roster/black-knife",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Black Knife Assassins",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/black-knife/3",
+    "family": "roster/black-knife",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Black Knife Assassins",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/black-knife/4",
+    "family": "roster/black-knife",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 different Black Knife Assassins",
+    "target": 4,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/dragon-heart/3",
+    "family": "roster/dragon-heart",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 bosses that drop a Dragon Heart",
+    "target": 3
+  },
+  {
+    "adapter": "roster/dragon-heart/4",
+    "family": "roster/dragon-heart",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 bosses that drop a Dragon Heart",
+    "target": 4
+  },
+  {
+    "adapter": "roster/avatar/2",
+    "family": "roster/avatar",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Erdtree or Putrid Avatars",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/avatar/3",
+    "family": "roster/avatar",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Erdtree or Putrid Avatars",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/avatar/4",
+    "family": "roster/avatar",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 different Erdtree or Putrid Avatars",
+    "target": 4,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/nights-cavalry/2",
+    "family": "roster/nights-cavalry",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Night's Cavalry",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/nights-cavalry/3",
+    "family": "roster/nights-cavalry",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Night's Cavalry",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/nights-cavalry/4",
+    "family": "roster/nights-cavalry",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 different Night's Cavalry",
+    "target": 4,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/tibia-mariner/2",
+    "family": "roster/tibia-mariner",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Tibia Mariners",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/tibia-mariner/3",
+    "family": "roster/tibia-mariner",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Tibia Mariners",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/tibia-mariner/4",
+    "family": "roster/tibia-mariner",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 different Tibia Mariners",
+    "target": 4,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/bell-bearing-hunter/2",
+    "family": "roster/bell-bearing-hunter",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 2 different Bell Bearing Hunters",
+    "target": 2
+  },
+  {
+    "adapter": "roster/bell-bearing-hunter/3",
+    "family": "roster/bell-bearing-hunter",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 different Bell Bearing Hunters",
+    "target": 3
+  },
+  {
+    "adapter": "roster/bell-bearing-hunter/4",
+    "family": "roster/bell-bearing-hunter",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 different Bell Bearing Hunters",
+    "target": 4
+  },
+  {
+    "adapter": "roster/multi-boss",
+    "family": "roster/multi-boss",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 3 fights that have two or more bosses",
+    "target": 3
+  },
+  {
+    "adapter": "roster/mounted",
+    "family": "roster/mounted",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 5 mounted bosses",
+    "target": 5
+  },
+  {
+    "adapter": "roster/name-tree",
+    "family": "roster/name-tree",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 5 bosses whose names contain \"Tree\"",
+    "target": 5
+  },
+  {
+    "adapter": "region/limgrave/4",
+    "family": "region/limgrave",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 bosses in Limgrave or the Weeping Peninsula",
+    "target": 4
+  },
+  {
+    "adapter": "region/limgrave/5",
+    "family": "region/limgrave",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 5 bosses in Limgrave or the Weeping Peninsula",
+    "target": 5
+  },
+  {
+    "adapter": "region/limgrave/6",
+    "family": "region/limgrave",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 6 bosses in Limgrave or the Weeping Peninsula",
+    "target": 6
+  },
+  {
+    "adapter": "region/liurnia/4",
+    "family": "region/liurnia",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 bosses in Liurnia",
+    "target": 4
+  },
+  {
+    "adapter": "region/liurnia/5",
+    "family": "region/liurnia",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 5 bosses in Liurnia",
+    "target": 5
+  },
+  {
+    "adapter": "region/caelid/4",
+    "family": "region/caelid",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 bosses in Caelid or Dragonbarrow",
+    "target": 4
+  },
+  {
+    "adapter": "region/caelid/5",
+    "family": "region/caelid",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 5 bosses in Caelid or Dragonbarrow",
+    "target": 5
+  },
+  {
+    "adapter": "region/altus/4",
+    "family": "region/altus",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 bosses on the Altus Plateau or Mt. Gelmir",
+    "target": 4
+  },
+  {
+    "adapter": "region/altus/5",
+    "family": "region/altus",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 5 bosses on the Altus Plateau or Mt. Gelmir",
+    "target": 5
+  },
+  {
+    "adapter": "region/altus/6",
+    "family": "region/altus",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 6 bosses on the Altus Plateau or Mt. Gelmir",
+    "target": 6
+  },
+  {
+    "adapter": "dungeon/catacombs/2",
+    "family": "dungeon/catacombs",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 2 catacombs",
+    "target": 2
+  },
+  {
+    "adapter": "dungeon/catacombs/3",
+    "family": "dungeon/catacombs",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 3 catacombs",
+    "target": 3
+  },
+  {
+    "adapter": "dungeon/caves/2",
+    "family": "dungeon/caves",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 2 caves or grottoes",
+    "target": 2
+  },
+  {
+    "adapter": "dungeon/caves/3",
+    "family": "dungeon/caves",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 3 caves or grottoes",
+    "target": 3
+  },
+  {
+    "adapter": "dungeon/tunnels/2",
+    "family": "dungeon/tunnels",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 2 tunnels or precipices",
+    "target": 2
+  },
+  {
+    "adapter": "dungeon/tunnels/3",
+    "family": "dungeon/tunnels",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 3 tunnels or precipices",
+    "target": 3
+  },
+  {
+    "adapter": "dungeon/altus-heros-grave",
+    "family": "dungeon/altus-heros-grave",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear a hero's grave on the Altus Plateau or Mt. Gelmir",
+    "target": 1
+  },
+  {
+    "adapter": "dungeon/evergaols/2",
+    "family": "dungeon/evergaols",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 2 evergaols",
+    "target": 2
+  },
+  {
+    "adapter": "dungeon/evergaols/3",
+    "family": "dungeon/evergaols",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 3 evergaols",
+    "target": 3
+  },
+  {
+    "adapter": "dungeon/evergaols/4",
+    "family": "dungeon/evergaols",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Clear 4 evergaols",
+    "target": 4
+  },
+  {
+    "adapter": "check/somberstone-bells",
+    "family": "check/somberstone-bells",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do both Somberstone Miner's Bell Bearing checks",
+    "target": 1
+  },
+  {
+    "adapter": "check/smithing-stone-bells",
+    "family": "check/smithing-stone-bells",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do both Smithing-Stone Miner's Bell Bearing checks",
+    "target": 1
+  },
+  {
+    "adapter": "check/glovewort-bells-1",
+    "family": "check/glovewort-bells-1",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do the Glovewort and Ghost-Glovewort Picker's Bell Bearing [1] checks",
+    "target": 1
+  },
+  {
+    "adapter": "check/glovewort-bells-2",
+    "family": "check/glovewort-bells-2",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do the Glovewort and Ghost-Glovewort Picker's Bell Bearing [2] checks",
+    "target": 1
+  },
+  {
+    "adapter": "check/cracked-pot",
+    "family": "check/cracked-pot",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 10 Cracked Pot checks",
+    "target": 10
+  },
+  {
+    "adapter": "check/ritual-pot",
+    "family": "check/ritual-pot",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 5 Ritual Pot checks",
+    "target": 5
+  },
+  {
+    "adapter": "check/talismans-10-unique-talismans",
+    "family": "check/talismans",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 10 different talisman checks",
+    "target": 10,
+    "distinct": true
+  },
+  {
+    "adapter": "check/talismans-3-legendary-talismans",
+    "family": "check/talismans",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 3 legendary talisman checks",
+    "target": 3
+  },
+  {
+    "adapter": "check/scarseals",
+    "family": "check/scarseals",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do both Scarseal checks",
+    "target": 1
+  },
+  {
+    "adapter": "check/fingerslayer-blade",
+    "family": "check/fingerslayer-blade",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do the Fingerslayer Blade check",
+    "target": 1
+  },
+  {
+    "adapter": "check/sorceries",
+    "family": "check/sorceries",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 12 different sorcery checks",
+    "target": 12,
+    "distinct": true
+  },
+  {
+    "adapter": "check/incantations",
+    "family": "check/incantations",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 14 different incantation checks",
+    "target": 14,
+    "distinct": true
+  },
+  {
+    "adapter": "check/staves",
+    "family": "check/staves",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 6 different staff checks",
+    "target": 6,
+    "distinct": true
+  },
+  {
+    "adapter": "check/memory-stone/3",
+    "family": "check/memory-stone",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 3 Memory Stone checks",
+    "target": 3
+  },
+  {
+    "adapter": "check/memory-stone/4",
+    "family": "check/memory-stone",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 4 Memory Stone checks",
+    "target": 4
+  },
+  {
+    "adapter": "check/memory-stone/5",
+    "family": "check/memory-stone",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 5 Memory Stone checks",
+    "target": 5
+  },
+  {
+    "adapter": "check/haligtree-medallion",
+    "family": "check/haligtree-medallion",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do both Haligtree Secret Medallion checks",
+    "target": 1
+  },
+  {
+    "adapter": "boss/astel-both",
+    "family": "boss/astel-both",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat both Astel bosses",
+    "target": 2
+  },
+  {
+    "adapter": "roster/npc-bosses",
+    "family": "roster/npc-bosses",
+    "scope": "base",
+    "kind": "roster",
+    "label": "Defeat 4 NPC bosses",
+    "target": 4
+  },
+  {
+    "adapter": "check/moon-of-nokstella",
+    "family": "check/moon-of-nokstella",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do the Moon of Nokstella check",
+    "target": 1
+  },
+  {
+    "adapter": "check/imbued-sword-key/2",
+    "family": "check/imbued-sword-key",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 2 Imbued Sword Key checks",
+    "target": 2
+  },
+  {
+    "adapter": "check/imbued-sword-key/3",
+    "family": "check/imbued-sword-key",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 3 Imbued Sword Key checks",
+    "target": 3
+  },
+  {
+    "adapter": "check/seals/3",
+    "family": "check/seals",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 3 different sacred seal checks",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "check/seals/4",
+    "family": "check/seals",
+    "scope": "base",
+    "kind": "collection",
+    "label": "Do 4 different sacred seal checks",
+    "target": 4,
+    "distinct": true
+  },
+  {
+    "adapter": "check/material-bells/2",
+    "family": "check/material-bells",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 2 Shadow Realm material-seller Bell Bearing checks",
+    "target": 2
+  },
+  {
+    "adapter": "check/material-bells/3",
+    "family": "check/material-bells",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 3 Shadow Realm material-seller Bell Bearing checks",
+    "target": 3
+  },
+  {
+    "adapter": "dungeon/dlc-catacombs",
+    "family": "dungeon/dlc-catacombs",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Clear 2 Shadow Realm catacombs",
+    "target": 2
+  },
+  {
+    "adapter": "roster/dlc-dragons",
+    "family": "roster/dlc-dragons",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 3 Shadow Realm dragon bosses",
+    "target": 3
+  },
+  {
+    "adapter": "dungeon/gaols",
+    "family": "dungeon/gaols",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Clear 2 gaols",
+    "target": 2
+  },
+  {
+    "adapter": "roster/dancing-lion/1",
+    "family": "roster/dancing-lion",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 1 Divine Beast Dancing Lion",
+    "target": 1
+  },
+  {
+    "adapter": "roster/dancing-lion/2",
+    "family": "roster/dancing-lion",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 2 Divine Beast Dancing Lions",
+    "target": 2
+  },
+  {
+    "adapter": "check/gaius-greaves",
+    "family": "check/gaius-greaves",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Gaius's Greaves check",
+    "target": 1
+  },
+  {
+    "adapter": "check/jolan",
+    "family": "check/jolan",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Swordhand of Night Jolán check",
+    "target": 1
+  },
+  {
+    "adapter": "roster/red-bear/1",
+    "family": "roster/red-bear",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 1 great red bear boss",
+    "target": 1
+  },
+  {
+    "adapter": "roster/red-bear/2",
+    "family": "roster/red-bear",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 2 great red bear bosses",
+    "target": 2
+  },
+  {
+    "adapter": "roster/red-bear/3",
+    "family": "roster/red-bear",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 3 great red bear bosses",
+    "target": 3
+  },
+  {
+    "adapter": "roster/dlc-npc-bosses",
+    "family": "roster/dlc-npc-bosses",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 3 Shadow Realm NPC bosses",
+    "target": 3
+  },
+  {
+    "adapter": "check/dlc-ashes-of-war",
+    "family": "check/dlc-ashes-of-war",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 3 Shadow Realm Ash of War checks",
+    "target": 3
+  },
+  {
+    "adapter": "check/dlc-spirit-ashes",
+    "family": "check/dlc-spirit-ashes",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 3 Shadow Realm spirit ash checks",
+    "target": 3
+  },
+  {
+    "adapter": "check/dragon-heart",
+    "family": "check/dragon-heart",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 2 Dragon Heart checks",
+    "target": 2
+  },
+  {
+    "adapter": "check/talisman-two-handed-sword",
+    "family": "check/talisman",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Two-Handed Sword Talisman check",
+    "target": 1
+  },
+  {
+    "adapter": "check/talisman-two-headed-turtle",
+    "family": "check/talisman",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Two-Headed Turtle Talisman check",
+    "target": 1
+  },
+  {
+    "adapter": "check/scorpion-stew",
+    "family": "check/scorpion-stew",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Scorpion Stew check",
+    "target": 1
+  },
+  {
+    "adapter": "check/golden-braid",
+    "family": "check/golden-braid",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Golden Braid check",
+    "target": 1
+  },
+  {
+    "adapter": "check/ledas-rune",
+    "family": "check/ledas-rune",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Leda's Rune check",
+    "target": 1
+  },
+  {
+    "adapter": "check/hefty-pot/4",
+    "family": "check/hefty-pot",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 4 Hefty Cracked Pot checks",
+    "target": 4
+  },
+  {
+    "adapter": "check/hefty-pot/5",
+    "family": "check/hefty-pot",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 5 Hefty Cracked Pot checks",
+    "target": 5
+  },
+  {
+    "adapter": "check/igons-finger",
+    "family": "check/igons-finger",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Igon's Furled Finger check",
+    "target": 1
+  },
+  {
+    "adapter": "dungeon/mausoleums/2",
+    "family": "dungeon/mausoleums",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Clear 2 nameless mausoleums",
+    "target": 2
+  },
+  {
+    "adapter": "dungeon/mausoleums/3",
+    "family": "dungeon/mausoleums",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Clear 3 nameless mausoleums",
+    "target": 3
+  },
+  {
+    "adapter": "dungeon/mausoleums/4",
+    "family": "dungeon/mausoleums",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Clear 4 nameless mausoleums",
+    "target": 4
+  },
+  {
+    "adapter": "roster/base-bosses-in-dlc/1",
+    "family": "roster/base-bosses-in-dlc",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 1 base-game boss type found in the Shadow Realm",
+    "target": 1,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/base-bosses-in-dlc/2",
+    "family": "roster/base-bosses-in-dlc",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 2 different base-game boss types found in the Shadow Realm",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/name-knight",
+    "family": "roster/name-knight",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat 3 bosses whose names contain \"Knight\"",
+    "target": 3
+  },
+  {
+    "adapter": "check/gravebird-set",
+    "family": "check/gravebird-set",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do all four Gravebird armor checks",
+    "target": 1
+  },
+  {
+    "adapter": "check/three-helms",
+    "family": "check/three-helms",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do the Salza's Hood, Death Mask Helm and Winged Serpent Helm checks",
+    "target": 1
+  },
+  {
+    "adapter": "check/blessing-of-marika/2",
+    "family": "check/blessing-of-marika",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 2 Blessing of Marika checks",
+    "target": 2
+  },
+  {
+    "adapter": "check/blessing-of-marika/3",
+    "family": "check/blessing-of-marika",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do 3 Blessing of Marika checks",
+    "target": 3
+  },
+  {
+    "adapter": "check/top-upgrade-materials/2",
+    "family": "check/top-upgrade-materials",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do checks for 2 different top-tier upgrade materials",
+    "target": 2,
+    "distinct": true
+  },
+  {
+    "adapter": "check/top-upgrade-materials/3",
+    "family": "check/top-upgrade-materials",
+    "scope": "dlc",
+    "kind": "collection",
+    "label": "Do checks for 3 different top-tier upgrade materials",
+    "target": 3,
+    "distinct": true
+  },
+  {
+    "adapter": "roster/bear-lion-hippo",
+    "family": "roster/bear-lion-hippo",
+    "scope": "dlc",
+    "kind": "roster",
+    "label": "Defeat one bear boss, one lion boss and one hippopotamus boss",
+    "target": 3
+  }
+]

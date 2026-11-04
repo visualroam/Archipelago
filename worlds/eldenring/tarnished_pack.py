@@ -1,0 +1,156 @@
+"""Patch 1.17 (Tarnished Pack) item-pool catalog and ownership boundary.
+
+The 2026-08-28 param diff established 31 new rows. The shipped English FMGs do not name them, so
+the 26 player-equipment names below are joined to IDs only where independent acquisition evidence
+settles the mapping: starting loadouts, field/shop lots, or invasion co-awards. Two NPC-only weapon
+bases and three Spectral Steed unlock goods deliberately remain outside the item pool.
+
+The equipment is available only when the explicit ownership option is enabled. Non-owner grant/use
+behaviour remains unproven, so default-off is the safety boundary rather than a hopeful runtime
+grant. ``gen_data.py`` adds this roster to the generated catalog and gives it honorary S tier.
+
+Source: clean pre-1.17/current ``gen_inputs.db`` param-table diff recorded on #1096. Weapon rows
+are collapsed through ``originEquipWep`` so reinforcement variants count as one base item.
+"""
+
+from typing import Mapping
+
+
+# Raw param row IDs added by Patch 1.17. Keep the categories separate: the same raw integer can
+# legally occur in more than one game item table, while FullID's high nibble disambiguates them.
+TARNISHED_PACK_WEAPON_IDS = frozenset({
+    3_560_000,
+    3_910_000,
+    8_530_000,
+    13_510_000,
+    13_900_000,
+    31_540_000,
+    62_520_000,
+    64_530_000,
+    66_530_000,
+    67_530_000,
+})
+
+TARNISHED_PACK_ARMOR_IDS = frozenset({
+    5_340_000, 5_340_100, 5_340_200, 5_340_300,
+    5_350_000, 5_350_100, 5_350_200, 5_350_300, 5_351_100,
+    5_360_000, 5_360_100, 5_360_200, 5_360_300, 5_361_000,
+    5_370_000, 5_370_100, 5_370_200, 5_370_300,
+})
+
+TARNISHED_PACK_GOODS_IDS = frozenset({2_009_600, 2_009_610, 2_009_620})
+
+# Complete disposition census for rows which are intentionally not player-pool equipment. Keeping
+# these named beside the admitted roster makes the 31-row Patch 1.17 param diff auditable as a
+# partition rather than relying on an issue comment to remember why five IDs are absent.
+TARNISHED_PACK_NPC_ONLY_WEAPON_IDS = frozenset({3_910_000, 13_900_000})
+TARNISHED_PACK_TORRENT_ATTIRE_IDS = TARNISHED_PACK_GOODS_IDS
+
+# Player-receivable equipment only. Sources: the verified parameter/MSB census on #1096 plus live
+# menu witnesses; public post-release acquisition guides independently corroborate the display
+# names and routes. 3_910_000 and 13_900_000 are invasion-NPC weapon bases, not separate rewards.
+TARNISHED_PACK_EQUIPMENT = {
+    "Leontiel's Greatsword": 3_560_000,
+    "Hefty Scimitar": 8_530_000,
+    "Golden Order Flail": 13_510_000,
+    "Silver Grooved Shield": 31_540_000,
+    "Ritual Thrusting Shield": 62_520_000,
+    "Reverse-Bladed Sword": 64_530_000,
+    "Reed Great Katana": 66_530_000,
+    "Idus Sword": 67_530_000,
+    "Broken Gold Mask": 0x1000_0000 | 5_340_000,
+    "Gold Tattoo (Chest)": 0x1000_0000 | 5_340_100,
+    "Gold Tattoo (Arm)": 0x1000_0000 | 5_340_200,
+    "Gold Tattoo (Leg)": 0x1000_0000 | 5_340_300,
+    "Silver Grooved Helm": 0x1000_0000 | 5_350_000,
+    "Silver Grooved Armor": 0x1000_0000 | 5_350_100,
+    "Silver Grooved Gauntlets": 0x1000_0000 | 5_350_200,
+    "Silver Grooved Greaves": 0x1000_0000 | 5_350_300,
+    "Silver Grooved Armor (Altered)": 0x1000_0000 | 5_351_100,
+    "Leontiel's Hat": 0x1000_0000 | 5_360_000,
+    "Leontiel's Armor": 0x1000_0000 | 5_360_100,
+    "Leontiel's Leather Gloves": 0x1000_0000 | 5_360_200,
+    "Leontiel's Boots": 0x1000_0000 | 5_360_300,
+    "Leontiel's Hat (Altered)": 0x1000_0000 | 5_361_000,
+    "Steel Helm": 0x1000_0000 | 5_370_000,
+    "Steel Armor": 0x1000_0000 | 5_370_100,
+    "Steel Gauntlets": 0x1000_0000 | 5_370_200,
+    "Steel Greaves": 0x1000_0000 | 5_370_300,
+}
+
+# Typed raw-row lookup for artifact datamines. Patch 1.17's normal English item FMGs do not carry
+# these paid-pack labels, so tools which derive shops/lots must use the same verified name join as
+# the generated item catalog rather than silently emitting blank rows. Types follow ShopLineupParam
+# (0 weapon, 1 protector); ItemLotParam uses 2 weapon / 3 protector and is translated by its caller.
+TARNISHED_PACK_PARAM_NAMES = {
+    (0 if full_id < 0x1000_0000 else 1,
+     full_id if full_id < 0x1000_0000 else full_id & 0x0fff_ffff): name
+    for name, full_id in TARNISHED_PACK_EQUIPMENT.items()
+}
+
+# One-shot acquisition flags admitted by the location half of the ownership option. The safe
+# slices are the eleven limited-stock merchant rows plus three ordinary, persistent corpse
+# pickups whose lot, asset, map position, and nearest grace were independently joined from the
+# live Patch 1.17 params and MSBs on #1096. These are flags (the
+# third tuple field in LOCATIONS), so the seed-level filter covers region creation, pool accounting,
+# slot data, and reconnect behavior at the same chokepoint.
+TARNISHED_PACK_LOCATION_ORDER = (
+    150680, 160660, 160670, 160680, 160690,
+    170090, 170100, 170110, 170120, 170130,
+    280960,
+    1_038_417_020, 1_047_427_000, 1_050_407_000,
+)
+TARNISHED_PACK_LOCATION_FLAGS = frozenset(TARNISHED_PACK_LOCATION_ORDER)
+
+# Acquisition-route census. ``admitted`` rows are exactly the finite merchant and persistent field
+# checks above. ``blocked_*`` rows are proven Patch 1.17 routes which remain outside generation until
+# their runtime semantics are observed; recording them here prevents a future census from silently
+# treating them as forgotten content. The tuple fields are (flag, route kind, disposition, label).
+TARNISHED_PACK_ROUTE_CENSUS = (
+    (150680, "merchant", "admitted", "Hefty Scimitar"),
+    (160660, "merchant", "admitted", "Steel Helm"),
+    (160670, "merchant", "admitted", "Steel Armor"),
+    (160680, "merchant", "admitted", "Steel Gauntlets"),
+    (160690, "merchant", "admitted", "Steel Greaves"),
+    (170090, "merchant", "admitted", "Silver Grooved Shield"),
+    (170100, "merchant", "admitted", "Silver Grooved Helm"),
+    (170110, "merchant", "admitted", "Silver Grooved Armor"),
+    (170120, "merchant", "admitted", "Silver Grooved Gauntlets"),
+    (170130, "merchant", "admitted", "Silver Grooved Greaves"),
+    (280960, "merchant", "admitted", "Reverse-Bladed Sword"),
+    (1_038_417_020, "field", "admitted", "Idus Sword"),
+    (1_047_427_000, "field", "admitted", "Ritual Thrusting Shield"),
+    (1_050_407_000, "field", "admitted", "Reed Great Katana"),
+    (60101, "torrent_attire", "blocked_activation", "Stormveil attire chest"),
+    (60102, "torrent_attire", "blocked_activation", "Ranni's Rise attire chest"),
+    (60103, "torrent_attire", "blocked_grant", "Capital Outskirts attire pickup"),
+    (11_007_952, "invasion", "blocked_missability", "Leyndell invasion reward"),
+    (1_052_397_500, "invasion", "blocked_missability", "Caelid invasion reward"),
+)
+
+# FullID category tags match ItemId::category in the client and the generated ITEM_CATALOG:
+# weapons=0x0..., armor=0x1..., goods=0x4....
+TARNISHED_PACK_FULL_IDS = frozenset(
+    TARNISHED_PACK_WEAPON_IDS
+    | {0x1000_0000 | row_id for row_id in TARNISHED_PACK_ARMOR_IDS}
+    | {0x4000_0000 | row_id for row_id in TARNISHED_PACK_GOODS_IDS}
+)
+
+
+def tarnished_pack_names(item_catalog: Mapping[str, int]) -> "frozenset[str]":
+    """Resolve every currently named Patch 1.17 item from the generated item catalog."""
+    return frozenset(
+        name for name, full_id in item_catalog.items() if full_id in TARNISHED_PACK_FULL_IDS)
+
+
+def pool_excluded_names(
+        dlc_on: bool, dlc_item_names, item_catalog: Mapping[str, int],
+        tarnished_pack_on: bool = False) -> "frozenset[str]":
+    """Return names no pool-augmentation path may inject.
+
+    DLC items retain their existing option-dependent behaviour. Tarnished Pack equipment is
+    admitted only when its explicit ownership toggle is on (#1096).
+    """
+    dlc = frozenset() if dlc_on else frozenset(dlc_item_names)
+    tarnished = frozenset() if tarnished_pack_on else tarnished_pack_names(item_catalog)
+    return dlc | tarnished
