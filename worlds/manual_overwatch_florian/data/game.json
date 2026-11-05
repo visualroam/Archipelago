@@ -1,0 +1,32 @@
+{
+  "game": "Overwatch",
+  "creator": "Florian",
+  "filler_item_name": "Applaus vom Chat",
+  "starting_items": [
+    {
+      "item_categories": [
+        "Rollen-Pässe"
+      ],
+      "random": 1
+    },
+    {
+      "item_categories": [
+        "Tank"
+      ],
+      "random": 2
+    },
+    {
+      "item_categories": [
+        "Damage"
+      ],
+      "random": 2
+    },
+    {
+      "item_categories": [
+        "Support"
+      ],
+      "random": 2
+    }
+  ],
+  "death_link": false
+}

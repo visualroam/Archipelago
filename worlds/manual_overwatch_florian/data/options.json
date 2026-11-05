@@ -1,0 +1,11 @@
+{
+  "core": {
+    "goal": {
+      "hidden": true
+    },
+    "filler_traps": {
+      "hidden": true
+    }
+  },
+  "user": {}
+}
