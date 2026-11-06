@@ -1,0 +1,1768 @@
+# options.py
+#
+# Copyright (C) 2025-2026 James Petersen <m@jamespetersen.ca>
+# Licensed under MIT. See LICENSE
+
+from collections.abc import Mapping, MutableMapping, Sequence, Set
+from dataclasses import dataclass
+from typing import Any, Literal, Optional
+from Options import Choice, DeathLink, DefaultOnToggle, NamedRange, OptionDict, OptionError, OptionGroup, OptionSet, PerGameCommonOptions, Range, StartInventoryPool, Toggle, Option, FreeText, Visibility
+
+from .data import Hm, special_encounters
+from .data.species import species, regional_mons, having_two_level_evos, legendary_mons, expand_set_via_evolutions
+from .data.regions import regions
+from .data.trainers import in_game_trainer_labels, trainer_party_supporting_starters, trainer_requires_national_dex, trainer_in_fight_area, trainer_name_to_trainer_const_name
+from .data.encounters import encounters, encounter_type_pairs, national_dex_requiring_encs, fight_area_encs
+
+class SpeciesBlacklist(OptionSet):
+    cached_blacklist: Set[str] | None = None
+
+    def blacklist(self) -> Set[str]:
+        if self.cached_blacklist is None:
+            if "legendaries" in self:
+                self.cached_blacklist = (frozenset(self.value) - {"legendaries"}) | set(legendary_mons)
+            else:
+                self.cached_blacklist = frozenset(self.value)
+        return self.cached_blacklist
+
+class RandomizeHms(DefaultOnToggle):
+    """
+    Adds the HMs to the pool.
+
+    The expectation is that this will be enabled. If not, depending on
+    other options—particularly barricades—certain locations may be inaccessible,
+    or certain seeds incompletable.
+    """
+    display_name = "Randomize HMs"
+
+class RandomizeBadges(DefaultOnToggle):
+    """
+    Adds the badges to the pool.
+
+    The expectation is that this will be enabled. If not, depending on
+    other options—particularly barricades—certain locations may be inaccessible,
+    or certain seeds incompletable.
+    """
+    display_name = "Randomize Badges"
+
+class RandomizeOverworlds(DefaultOnToggle):
+    """Adds overworld items to the pool."""
+    display_name = "Randomize Overworlds"
+
+class RandomizeHiddenItems(Toggle):
+    """Adds hidden items to the pool."""
+    display_name = "Randomize Hidden Items"
+
+class RandomizeNpcGifts(DefaultOnToggle):
+    """Adds NPC gifts to the pool."""
+    display_name = "Randomize NPC Gifts"
+
+class RandomizeKeyItems(DefaultOnToggle):
+    """Adds key items to the pool."""
+    display_name = "Randomize Key Items"
+
+class RandomizeRods(DefaultOnToggle):
+    """Adds rods to the pool."""
+    display_name = "Randomize Rods"
+
+class RandomizePoketchApps(DefaultOnToggle):
+    """Adds Pokétch apps to the pool (and the Pokétch)."""
+    display_name = "Randomize Poketch Apps"
+
+class RandomizeRunningShoes(Toggle):
+    """Adds the running shoes to the pool."""
+    display_name = "Randomize Running Shoes"
+
+class RandomizeBicycle(Toggle):
+    """Adds the bicycle to the pool."""
+    display_name = "Randomize Bicycle"
+
+class RandomizePokedex(Toggle):
+    """Add the Pokedex to the pool. Note: this also adds the national dex to the pool."""
+    display_name = "Randomize Pokedex"
+
+class RandomizeAccessories(Toggle):
+    """Adds fashion accessories to the item pool."""
+    display_name = "Randomize Accessories"
+
+class RandomizeCartridges(Choice):
+    """Adds the GBA cartridges to the item pool. The no location option removes the location and adds the cartridges to the starting inventory. The false option means they won't be randomized."""
+    display_name = "Randomize Cartridges"
+    default = 1
+    option_true = 1
+    option_false = 0
+    option_no_location = 2
+
+class RandomizeTimeItems(Choice):
+    """Adds the time items to the item pool. The no location option removes the location and adds the time items to the starting inventory. The false option means they won't be randomized."""
+    display_name = "Randomize Time Items"
+    default = 1
+    option_true = 1
+    option_false = 0
+    option_no_location = 2
+
+class RemoveBadgeRequirement(OptionSet):
+    """
+    Specify which HMs do not require a badge to use outside of battle. This overrides the HM Badge Requirements setting.
+
+    HMs should be provided in the form: "fly", "waterfall", "rock_smash", etc.
+    They can be specified all at once with "all".
+    """
+    display_name = "Remove Badge Requirement"
+    valid_keys = ["cut", "fly", "surf", "strength", "defog", "rock_smash", "waterfall", "rock_climb", "all"]
+
+    def export(self):
+        if "all" in self:
+            return [hm.name.lower() for hm in list(Hm)[:-1]]
+        else:
+            return sorted(self.value)
+
+class VisibilityHmLogic(DefaultOnToggle):
+    """Logically require Flash or Defog for traversing and finding locations in applicable regions."""
+    display_name = "Logically Require Flash or Defog for Applicable Regions"
+
+class DowsingMachineLogic(DefaultOnToggle):
+    """Logically require the Dowsing Machine to find hidden items."""
+    display_name = "Logically Require Dowsing Machine for Hidden Items"
+
+class Goal(Choice):
+    """The goal of the randomizer. Currently, this only supports defeating the champion and entering the hall of fame."""
+    display_name = "Goal"
+    default = 0
+    option_champion = 0
+
+class AddMasterRepel(Toggle):
+    """
+    Add a master repel item to the item pool. The master repel is a key item.
+    It is a repel that blocks all encounters, and never runs out.
+    """
+    display_name = "Add Master Repel"
+
+class ExpMultiplier(Option[int | str]):
+    """
+    Set an experience multiplier for all gained experience.
+    This can either be an integer between 0 and 65535, inclusive,
+    or a string of a fraction "a/b", where the numerator is
+    between 0 and 65535, inclusive, and the denominator is
+    between 1 and 65535, inclusive.
+
+    This option can be modified in-game.
+    """
+    display_name = "Exp. Multiplier"
+    default = 1
+
+    def __init__(self, value: str | int):
+        assert isinstance(value, str) or isinstance(value, int), "value of ExpMultiplier must be a string or an integer"
+        self.value = value
+
+    @classmethod
+    def from_text(cls, text: str) -> "ExpMultiplier":
+        try:
+            return cls(int(text.strip()))
+        except ValueError:
+            return cls(text.strip())
+
+    @classmethod
+    def from_any(cls, data: Any) -> "ExpMultiplier":
+        if isinstance(data, int):
+            return cls(data)
+        else:
+            return cls.from_text(data)
+
+    @classmethod
+    def get_option_name(cls, value: str | int) -> str:
+        if isinstance(value, str):
+            return "".join(c for c in value if not c.isspace())
+        else:
+            return str(value)
+
+    def __eq__(self, other):
+        if isinstance(other, self.__class__):
+            return other.to_bytes() == self.to_bytes()
+        elif isinstance(other, str) or isinstance(other, int):
+            return ExpMultiplier(other).to_bytes() == self.to_bytes()
+        else:
+            raise TypeError(f"Can't compare {self.__class__.__name__} with {other.__class__.__name__}")
+
+    def verify(self, *args, **kwargs) -> None:
+        self.to_bytes()
+
+    def to_bytes(self) -> bytes:
+        def try_ints(num: int, denom: int = 1) -> bytes:
+            if num < 0 or num > 65535:
+                raise OptionError(f"exp multiplier numerator must be between 0 and 65535")
+            elif denom < 1 or denom > 65535:
+                raise OptionError(f"exp multiplier denominator must be between 1 and 65535")
+            else:
+                return num.to_bytes(2, 'little') + denom.to_bytes(2, 'little')
+        if isinstance(self.value, int):
+            return try_ints(self.value)
+        pivot = self.value.find('/')
+        if pivot == -1:
+            # only a numerator
+            try:
+                return try_ints(int(self.value.strip()))
+            except ValueError:
+                raise OptionError("exp multiplier string must be an integer or fraction")
+        else:
+            try:
+                return try_ints(int(self.value[:pivot].strip()), int(self.value[pivot + 1:].strip()))
+            except ValueError:
+                raise OptionError("exp multiplier string must be an integer or fraction")
+
+class BlindTrainers(Toggle):
+    """
+    Set whether trainers will be blind.
+
+    This option can also be modified in the in-game options menu.
+    """
+    display_name = "Blind Trainers"
+
+class GameOptions(OptionDict):
+    """
+    Presets in-game options.
+
+    Allowed options and values, with default first:
+
+    text_speed: mid/slow/fast - Sets the text speed
+    sound: stereo/mono - Sets the sound mode
+    battle_scene: on/off - Sets whether the battle animations are shown
+    battle_style: shift/set - Sets whether pokemon can be changed when the opponent's pokemon faints
+    button_mode: normal/start=x/l=a - Sets the button mode
+    text_frame: 1–20 - Sets the textbox frame. "random" will pick a random frame.
+    received_items_notification: jingle/nothing/message - Sets the received_items_notification.
+    default_player_name: player_name/custom/random/vanilla - Sets the default player name. with player_name, tries to use the AP player name.
+    default_rival_name: random/custom/player_name/vanilla - Sets the default rival name. with random, picks from one of the players in the AP.
+    name_strictness: relaxed/strict - How strict setting the default player/rival name is. With strict, it will require a name of length less than or equal to 7, with no invalid characters. With relaxed, it will truncate the name and fill the invalid characters with question marks.
+    default_gender: vanilla/male/female/random - Sets the default gender.
+
+    The text_speed, sound, battle_scene, battle_style, button_mode, text_frame, and received_items_notification
+    options can additionally be modifier in the in-game options menu.
+
+    for the player and rival names, the maximum length is 7 characters, and
+    the following characters are accepted:
+    all alphanumeric characters (A–Z, a–z, 0–9),
+    and the following symbols: , . ' - : ; ! ? " ( ) ~ @ # % + * / =,
+    and as spaces. Additionally, some special characters, for example most accented vowels, are accepted.
+
+    If the player or rival names do not satisfy these constraints, the game will use its original
+    behaviour, where the player or rival names are entered during the starting cutscene.
+    """
+    display_name = "Game Options"
+    default = {
+        "text_speed": "mid",
+        "sound": "stereo",
+        "battle_scene": "on",
+        "battle_style": "shift",
+        "button_mode": "normal",
+        "text_frame": 1,
+        "received_items_notification": "jingle",
+        "default_player_name": "player_name",
+        "default_rival_name": "random",
+        "name_strictness": "relaxed",
+        "default_gender": "vanilla",
+    }
+
+    def __getattr__(self, name: str) -> Any:
+        if name in GameOptions.default:
+            return self.get(name, GameOptions.default[name])
+        else:
+            raise AttributeError(name, self)
+
+class RequireFlyForNorthSinnoh(Toggle):
+    """
+    Require HM02 Fly (and the badge if necessary) to logically access North Sinnoh.
+    """
+    display_name = "North Sinnoh Requires Fly"
+
+class RequirePoketchCheckRoute203(DefaultOnToggle):
+    """
+    Whether Looker blocks you from exiting Jubilife city towards Route 203 if you
+    don't have a Pokétch.
+    """
+    display_name = "Require Pokétch for Route 203 from Jubilife"
+
+class RemoteItems(Choice):
+    """
+    Whether local items should be given in-game, or sent by the server.
+    This overrides the show randomized progression items option: all items are shown.
+
+    Choices:
+    - off: no items are remote.
+    - only_randomized: only randomized items are remote.
+    - only_randomized_or_progression: only randomized items or progression items are remote.
+    - all: all (randomizable) items are remote.
+    """
+    display_name = "Remote Items"
+    default = 0
+    option_off = 0
+    option_only_randomized = 1
+    option_only_randomized_or_progression = 2
+    option_all = 3
+
+class FPS60(Toggle):
+    """
+    Whether the 60 FPS patch should be applied.
+
+    This option can also be modified in the in-game options menu.
+    """
+    display_name = "60 FPS"
+
+class AddSSTicket(Toggle):
+    """
+    Add the S.S. Ticket to the item pool.
+    The S.S. ticket can be used to travel to the fight area before defeating Cynthia.
+    Note: the S.S. Ticket is required to access the fight area, but
+    if it is not randomized, it is given by the player's mom
+    after defeating Cynthia.
+    """
+    display_name = "Add S.S. Ticket"
+
+class NationalDexNumMons(Range):
+    """
+    Number of seen regional Pokémon required to complete the Regional
+    Pokédex. (This is when you can receive the National Dex from Oak)
+    """
+    display_name = "National Dex Num Mons"
+    range_start = 1
+    # range end will be expanded as more encounters are added.
+    range_end = 210
+    default = 60
+
+class AddMarshPass(Toggle):
+    """
+    Add the Marsh Pass item to the game. The Marsh pass gives free access to the Great Marsh,
+    but if it is enabled, it is required to enter. (i.e., you cannot pay to enter the Great Marsh
+    if this option is enabled)
+    """
+    display_name = "Add Marsh Pass"
+
+class SunyshoreEarly(Toggle):
+    """
+    With this option enabled, access to Sunyshore City via Valor Lakefront is no longer blocked
+    until the Distortion World has been cleared.
+    """
+    display_name = "Early Sunyshore"
+
+class AddStorageKey(Toggle):
+    """
+    Add the Storage Key item to the item pool. This allows access to the warehouse portion
+    of the Veilstone Galactic HQ without having to clear all three lake events.
+    """
+    display_name = "Add Storage Key"
+
+class UnownsOption(Choice):
+    """
+    How the Maniac Tunnel is handled.
+
+    Vanilla: 26 Unown forms must be encountered before the Maniac Tunnel is traversable.
+    Item: 28 "Unown Form" items are added to the item pool. 26 of them must be collected
+    before the Maniac Tunnel is traversable.
+    None: The Maniac Tunnel is always traversable.
+    """
+    display_name = "Unowns Choice"
+    option_vanilla = 0
+    option_item = 1
+    option_none = 2
+    default = 1
+
+class AddBag(Toggle):
+    """
+    Add the bag to the item pool. Before obtaining it, the bag cannot be opened in the menu.
+    """
+    display_name = "Add Bag"
+
+class PastoriaBarriers(Toggle):
+    """
+    Add barriers in Route 212 and Route 214, blocking the path to Pastoria City
+    until the player has surf.
+    """
+    display_name = "Pastoria Barriers"
+
+class HMCutIns(Toggle):
+    """
+    Whether HM Cut-Ins should be played.
+
+    This option can also be modified in the in-game options menu.
+    """
+    display_name = "HM Cut-Ins"
+
+class BuckPos(Toggle):
+    """
+    Whether Buck should be moved to the end of Stark Mountain.
+
+    This option can also be modified in the in-game options menu.
+    """
+    display_name = "Buck Position"
+
+class HBSpeed(Range):
+    """
+    The speed multiplier of the health bar.
+
+    This option can also be modified in the in-game options menu.
+    """
+    display_name = "Healthbar Speed"
+    range_start = 1
+    range_end = 16
+    default = 1
+
+class NormalizeEncounters(DefaultOnToggle):
+    """
+    In the vanilla game, encounter table entries have varying probabilities, from 20% down to 1%.
+    This option will normalize these, so they all have the same probability. The normalized
+    probabilities are 1/12 for each entry in the land table, and 1/5 for each entry in the water
+    and rod tables.
+
+    This option is modifiable in the in-game options menu.
+
+    Note: this does not mean that there are twelve encounter slots, and a 1/12 chance for each slot.
+    Often there will only be two or three encounter slots per route, occupying all twelve entries
+    in the encounter table. This option only means that the *smallest* possible probability for any
+    slot will be 1/12. (except for special encounters, where there may be more or less table
+    entries)
+    """
+    display_name = "Normalize Encounters"
+
+class InstantText(Toggle):
+    """
+    Have text scroll instantly.
+
+    This option is modifiable in the in-game options menu.
+    """
+    display_name = "Instant Text"
+
+class HoldAToAdvance(Toggle):
+    """
+    You no longer need to press A to advance text, holding it will suffice. (Same for B)
+
+    This option is modifiable in the in-game options menu.
+    """
+    display_name = "Hold A to Advance"
+
+class ReusableTms(Toggle):
+    """TMs are reusable."""
+    display_name = "Reusable TMs"
+
+class AlwaysCatch(Toggle):
+    """
+    Have a 100% chance of catching any encounter.
+
+    This option is modifiable in the in-game options menu.
+    """
+    display_name = "Always Catch"
+
+class StartWithSwarms(DefaultOnToggle):
+    """
+    Start the game with swarms enabled.
+    Note: swarms will only be enabled after you obtain the poffin case,
+    which is when you can control their locations.
+    """
+    display_name = "Start With Swarms"
+
+class CanResetLegendariesInAPHelper(DefaultOnToggle):
+    """Can reset roamers with the AP Helper. (Present in the 2nd floor of any Pokémon Center)"""
+    display_name = "Can Reset Roamers in AP Helper"
+
+class EvoItemsShopInAPHelper(DefaultOnToggle):
+    """Evolution items shop is available with the AP Helper. (Present in the 2nd floor of any Pokémon Center)"""
+    display_name = "Evolution Item Shop in AP Helper"
+
+class CheatsEnabled(Toggle):
+    """Client cheats are enabled."""
+    display_name = "Cheats Enabled"
+
+class GuaranteedEscape(Toggle):
+    """
+    You will always be able to escape from wild encounters.
+
+    This option is modifiable in the in-game options menu.
+    """
+    display_name = "Guaranteed Escape"
+
+class TalkTrainersWithoutFight(Toggle):
+    """
+    You can talk to trainers without having to fight them.
+    This only applies when you talk to them, not if they spot you.
+    Note: them spotting you can be disabled by the blind trainers option.
+
+    This option is modifiable in the in-game options menu.
+    """
+    display_name = "Talk to Trainers without Fighting Them"
+
+class RandomizeEncounters(Toggle):
+    """Randomize encountered Pokémon. This does not affect static legendaries, like Giratina."""
+    display_name = "Randomize Encounters"
+
+
+ENCOUNTER_METHOD_MAP: Mapping[str, Sequence[str]] = {
+    "rods": ["old_rod", "good_rod", "super_rod"],
+    "cartridges": ["emerald", "firered", "leafgreen", "sapphire", "ruby"],
+    "time": ["day", "night"],
+    "great_marsh_observatory": ["great_marsh_observatory", "great_marsh_observatory_national_dex"],
+}
+
+class InLogicEncounters(OptionSet):
+    """
+    Which methods/variations of encounters are in logic.
+    Valid keys:
+    - surf: surfing encounters.
+    - rods: fishing encounters.
+    - radar: encounters with the Poké Radar, which is activated in tall grass.
+    - cartridges: tall-grass encounters which require specific Game Boy Advanced Pokémon cartridges to be inserted.
+                  These are activated in the Pokétch, within a newly-created app.
+    - time: tall-grass encounters which require a specific time of day.
+            These are activated in the Pokétch, within the digital watch app.
+    - swarms: tall-grass encounters which are only present in swarms.
+              Swarms can be manually triggered within the route the player is in if the player has the poffin case.
+              The method to trigger them is to select a berry in the bag, and choose the SMN SWARM option.
+              By default, swarms are activated once the poffin case is obtained. This is contrary to vanilla behaviour.
+              To recover vanilla behaviour, modify the start_with_swarms option. 
+    - great_marsh_observatory: wild grass encounters in the Great Marsh which are modified by the binoculars.
+                               In the second floor of the Great Marsh observatory building, there is a set of binoculars.
+                               Each time they are interacted with, a new set of six Pokémon are displayed, one for each
+                               of the six Great Marsh regions.
+                               At the start, there are eight possible species which can be found. Once the national
+                               dex is acquired, another eight species can be encountered.
+    - regular_honey_tree: encounters from honey trees. Interact once to slather honey on the tree. Interact a second
+                          time for the encounter.
+    - munchlax_honey_tree: honey-tree encounters on the munchlax honey trees.
+                           At generation, four honey trees are chosen as munchlax honey trees.
+                           These will have an additional encounterable species.
+                           The munchlax honey trees can be distinguished with the dowsing machine,
+                           once the tree camera item is obtained.
+                           Before the tree camera is obtained, the probability of the special encounter is 1/100.
+                           After it is obtained, the probability is increased to 1/13.
+                           The tree camera, Pokétch, and dowsing machine are required by the world's logic to access
+                           this encounter.
+    - feebas_fishing: in the basement of Mt. Coronet is a large lake. On this lake, four random tiles are selected.
+                      These four tiles will have a 1/2 chance of a special encounter.
+                      They can be identified using the dowsing machine, once the PokéSonar item is obtained.
+                      The PokéSonar, Pokétch, and dowsing machine are required by the world's logic to access
+                      this encounter.
+    - trophy_garden: in the trophy garden in the mansion in route 210 north, there are special encounters.
+                     These are triggered by talking to the rich man in the office, where he will announce that a
+                     species can be encountered in the garden. He can be talked to over and over again to cycle
+                     the selected species. He can only be triggered once the national dex is obtained.
+    - odd_keystone: in route 209, there is a small stone mound. Once an odd keystone is obtained,
+                    it can be interacted with to access a special encounter. Each attempt uses an odd keystone.
+                    Odd keystones can be purchased in the evolution items shop after one has been obtained.
+    - roamers: there are five roaming species. They have different conditions for activation.
+               Three are activated by talking to Prof. Oak in Eterna city, after previously obtaining the national dex
+               and talking to him in Pal Park Lobby.
+               One is activated by interacting with Cresselia on Fullmoon Island.
+               One is activated by interacting with Mesprit in the cave on the island at Lake Verity.
+               Once they roaming species are activated, their positions can be tracked using the marking map Pokétch
+               app, which is required by the world's logic to catch them. The will be randomly encountered in the
+               routes within which they are present, and move routes every time a different region is loaded.
+               If a roamer is defeated, it can be reset by clearing the hall of fame. If the option is enabled,
+               it can also be reset by the AP Helper NPC in the second floor of any Pokémon Center.
+               Once reset, it will need to be activated again before it can be encountered.
+    """
+    display_name = "In Logic Encounters"
+    default = {"surf", "rods", "radar", "cartridges", "time", "swarms", "great_marsh_observatory", "regular_honey_tree", "munchlax_honey_tree", "feebas_fishing", "trophy_garden", "odd_keystone", "roamers"}
+    valid_keys = ["surf", "rods", "radar", "cartridges", "time", "swarms", "great_marsh_observatory", "regular_honey_tree", "munchlax_honey_tree", "feebas_fishing", "trophy_garden", "odd_keystone", "roamers"]
+    cached_methods: Optional[Set[str]] = None
+
+    def methods(self) -> Set[str]:
+        if self.cached_methods is None:
+            self.cached_methods = {v for k in self.value for v in ENCOUNTER_METHOD_MAP.get(k, [k])}
+        return self.cached_methods
+
+
+class EncounterSpeciesBlacklist(SpeciesBlacklist):
+    """
+    Specify the banned encounter species.
+    The whitelist has precedence over this.
+    This has no effect if starters are not randomized.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    legendaries, all lowercase, will be interpreted as banning all legendary
+    species.
+
+    Currently, this cannot include kecleon, geodude.
+    Additionally, you cannot block both snorlax and munchlax. If snorlax is blocked,
+    then level_happiness must be in logic.
+    """
+    valid_keys = list(species.keys() - {"kecleon", "geodude"}) + ["legendaries"]
+    display_name = "Encounter Species Blacklist"
+
+class RandomizeTrainerParties(Toggle):
+    """Randomize trainer party members."""
+    display_name = "Randomize Trainer Parties"
+
+class TrainerPartyBlacklist(SpeciesBlacklist):
+    """
+    Specify the banned trainer party species.
+    The whitelist has precedence over this.
+    This has no effect if starters are not randomized.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    legendaries, all lowercase, will be interpreted as banning all legendary
+    species.
+    """
+    valid_keys = list(species) + ["legendaries"]
+    display_name = "Trainer Party Blacklist"
+
+class RandomizeStarters(Toggle):
+    """Randomize starter Pokémon."""
+    display_name = "Randomize Starters"
+
+class RequireTwoLevelEvolutionStarters(Toggle):
+    """
+    If the starters are randomized, require that they all be two-level-evolution species.
+    This option only applies to the blacklist. If the whitelist is nonempty,
+    it is ignored.
+    """
+    display_name = "Require Two Level Evolution Starters"
+
+class StarterWhitelist(OptionSet):
+    """
+    Specify the possible starters that can be randomized.
+    This has precedence over the blacklist and requiring two-level-evolution
+    species.
+    This has no effect if starters are not randomized.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    Note: legendaries is **not** a valid key for this option.
+    """
+    display_name = "Starter Whitelist"
+    valid_keys = list(species)
+
+class StarterBlacklist(SpeciesBlacklist):
+    """
+    Specify the banned starters.
+    The whitelist has precedence over this.
+    This has no effect if starters are not randomized.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    legendaries, all lowercase, will be interpreted as banning all legendary
+    species.
+    """
+    display_name = "Starter Blacklist"
+    valid_keys = list(species) + ["legendaries"]
+
+class RandomizeBunearyInIntro(DefaultOnToggle):
+    """Randomize the species of the Pokémon that is shown in the intro."""
+    display_name = "Randomize Intro Pokémon"
+
+NUM_TRAINERS = sum(len(r.trainers) for r in regions.values())
+
+class TrainersanityCount(NamedRange):
+    """
+    Each trainer adds a location to the game. These locations are
+    filled with nuggets by default.
+    """
+    display_name = "Trainersanity Count"
+    default = 0
+    range_start = 0
+    range_end = NUM_TRAINERS
+    special_range_names = {
+        "none": default,
+        "full": range_end,
+    }
+
+class TrainersanityWhitelist(OptionSet):
+    """
+    Specify the possible trainers which can be trainersanity locations.
+    This has precedence over the trainersanity blacklist.
+    """
+    display_name = "Trainersanity Whitelist"
+    valid_keys = in_game_trainer_labels
+
+    def to_const_names(self) -> Set[str]:
+        return {trainer_name_to_trainer_const_name[v] for v in self.value}
+
+class TrainersanityBlacklist(OptionSet):
+    """
+    Specify the trainers which cannot be trainersanity locations.
+    The whitelist has precedence over this.
+    """
+    display_name = "Trainersanity Blacklist"
+    valid_keys = in_game_trainer_labels
+
+    def to_const_names(self) -> Set[str]:
+        return {trainer_name_to_trainer_const_name[v] for v in self.value}
+
+class TrainersanityRequired(OptionSet):
+    """
+    Specify trainers which must be trainersanity locations.
+    Has precedence over the whitelist and blacklist.
+    """
+    display_name = "Trainersanity Required"
+    valid_keys = in_game_trainer_labels
+
+    def to_const_names(self) -> Set[str]:
+        return {trainer_name_to_trainer_const_name[v] for v in self.value}
+
+class DexsanityCount(NamedRange):
+    """
+    How many dexsanity locations there will be.
+    """
+    display_name = "Dexsanity Count"
+    default = 0
+    range_start = 0
+    range_end = 493
+    special_range_names = {
+        "none": default,
+        "full": range_end,
+    }
+
+class DexsanityMode(Choice):
+    """
+    The dexsanity mode.
+
+    Options:
+    - noreq: no items are required to trigger dexsanity locations.
+    - req: the Pokedex (or National Dex for non-regional species) is required
+           to trigger dexsanity locations.
+    - req_noprompt: same as req, but when you initially get the Pokedex
+                    or National Dex, do not prompt for each already seen
+                    dexsanity species.
+    """
+    display_name = "Dexsanity Mode"
+    default = 1
+    option_noreq = 1
+    option_req = 2
+    option_req_noprompt = 3
+
+class RandomizeRoamers(Toggle):
+    """
+    Randomize roaming Pokemon.
+    """
+    display_name = "Randomize Roamers"
+
+class RoamerBlacklist(SpeciesBlacklist):
+    """
+    Specify the banned roaming Pokemon species.
+    The whitelist has precedence over this.
+    This has no effect if starters are not randomized.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    legendaries, all lowercase, will be interpreted as banning all legendary
+    species.
+    """
+    valid_keys = list(species) + ["legendaries"]
+    display_name = "Roamer Blacklist"
+
+class InLogicEvolutionMethods(OptionSet):
+    """
+    Evolution methods that are in logic.
+    Valid keys:
+    - level: all species which require a specific level to evolve.
+    - happiness: all species which require happiness to evolve.
+    - use_item: all species which require a specific item to evolve. This includes trade evolutions (item is linking cord) and levelup while knowing a move (moves are taught by their corresponding TMs)
+    - held_item: all species which require a held item to evolve.
+    - time: all species which require being evolved at certain times.
+    - location: all species which require being evolved at certain locations.
+    - mildly_annoying: the secondary evolution of nincada, leveling up with a certain species in the party, those requiring certain genders.
+    - highly_annoying: the evolutions of tyrogue, wurmple, and feebas.
+
+    For species whose evolutions intersect multiple categories, all categories are required for their evolution to be in logic. For example, time and held_item must be specified for happiny's evolution to be in logic. level and mildly_annoying must be specified for the evolution of nincada into shedinja.
+    """
+    display_name = "In-Logic Evolution Methods"
+    default = {"level", "use_item", "held_item", "time", "location", "happiness"}
+    valid_keys = {"level", "happiness", "use_item", "held_item", "time", "location", "mildly_annoying", "highly_annoying"}
+
+    cached_methods: Optional[Set[str]] = None
+
+    def methods(self) -> Set[str]:
+        if self.cached_methods is not None:
+            return self.cached_methods
+        ret = set()
+        if "level" in self:
+            ret |= {
+                "level",
+                "level_ninjask",
+            }
+            if "mildly_annoying" in self:
+                ret |= {
+                    "level_shedinja",
+                    "level_male",
+                    "level_female",
+                }
+            if "highly_annoying" in self:
+                ret |= {
+                    "level_atk_gt_def",
+                    "level_atk_eq_def",
+                    "level_atk_lt_def",
+                    "level_pid_low",
+                    "level_pid_high",
+                }
+
+
+        if "time" in self and "held_item" in self:
+            ret |= {
+                "level_with_held_item_day",
+                "level_with_held_item_night",
+            }
+
+        if "mildly_annoying" in self:
+            ret.add("level_species_in_party")
+
+        if "highly_annoying" in self:
+            ret.add("level_beauty")
+
+        if "happiness" in self:
+            ret.add("level_happiness")
+            if "time" in self:
+                ret |= {
+                    "level_happiness_day",
+                    "level_happiness_night",
+                }
+
+        if "use_item" in self:
+            ret |= {
+                "use_item",
+                "trade",
+                "level_know_move",
+            }
+            if "held_item" in self:
+                ret.add("trade_with_held_item")
+            if "mildly_annoying" in self:
+                ret |= {
+                    "use_item_male",
+                    "use_item_female",
+                }
+
+        if "location" in self:
+            ret |= {
+                "level_magnetic_field",
+                "level_moss_rock",
+                "level_ice_rock",
+            }
+
+        self.cached_methods = ret
+        return ret
+
+class AddHMReader(Choice):
+    """
+    Add the HM Reader item. The HM Reader is an item that lets you use field moves without teaching them.
+
+    Options:
+    - no: Don't add the HM Reader item.
+    - itempool: Add the HM Reader item to the itempool.
+    - precollected: Start with the HM Reader item.
+    """
+    option_no = 0
+    option_itempool = 1
+    option_precollected = 2
+    default = option_no
+    display_name = "Add HM Reader"
+
+class HMReaderMode(Choice):
+    """
+    Mode for the HM Reader. The HM Reader is an item that lets you use field moves without teaching them.
+
+    Options:
+    - req_mon: require a Pokemon in your party to which you can teach the move, in order for the HM Reader to use it.
+    - noreq_mon: do not require a Pokemon in your party to which you can teach the move.
+    """
+    option_req_mon = 0
+    option_noreq_mon = 1
+    default = option_req_mon
+    display_name = "HM Reader Mode"
+
+class BoatCanalavePastoria(Choice):
+    """
+    How the boat travels between Canalave city and Pastoria city.
+
+    Options:
+    - off: the boat does not travel between them.
+    - ss_ticket: require the S.S. ticket to travel between them.
+    - on: they can be travelled between always.
+    """
+    option_off = 0
+    option_ss_ticket = 2
+    option_on = 1
+    default = option_off
+    display_name = "Boat Canalave–Pastoria"
+
+class BoatCanalaveSnowpoint(Choice):
+    """
+    How the boat travels between Canalave city and Snowpoint city.
+
+    Options:
+    - off: the boat does not travel between them.
+    - ss_ticket: require the S.S. ticket to travel between them.
+    - on: they can be travelled between always.
+    """
+    option_off = 0
+    option_ss_ticket = 2
+    option_on = 1
+    default = option_off
+    display_name = "Boat Canalave–Snowpoint"
+
+class BoatPastoriaSnowpoint(Choice):
+    """
+    How the boat travels between Pastoria city and Snowpoint city.
+
+    Options:
+    - off: the boat does not travel between them.
+    - ss_ticket: require the S.S. ticket to travel between them.
+    - on: they can be travelled between always.
+    """
+    option_off = 0
+    option_ss_ticket = 2
+    option_on = 1
+    default = option_off
+    display_name = "Boat Pastoria–Snowpoint"
+
+class Route207Barricade(Choice):
+    """
+    What barricade is present in Route 207 (which is above Oreburgh City).
+    """
+    # bottom two bits are map: none, bicycle_slope, or rock_climb
+    # three after are object event barricade
+    option_none = 0b00000
+    option_bicycle_slope = 0b00001
+    option_rock_climb = 0b00010
+    option_impassable = 0b00100
+    option_cut_tree = 0b01000
+    option_rock_smash = 0b01100
+    option_strength_boulder = 0b10000
+    option_psyduck = 0b10100
+    option_bicycle_slope_and_cut_tree = 0b01001
+    option_bicycle_slope_and_rock_smash = 0b01101
+    option_bicycle_slope_and_strength_boulder = 0b10001
+    option_bicycle_slope_and_psyduck = 0b10101
+    option_rock_climb_and_cut_tree = 0b01010
+    option_rock_climb_and_rock_smash = 0b01110
+    option_rock_climb_and_strength_boulder = 0b10010
+    option_rock_climb_and_psyduck = 0b10110
+    default = option_bicycle_slope
+    display_name = "Route 207 Barricade"
+
+class RandomizeFlyItems(Choice):
+    """
+    Add fly locations to the pool.
+    """
+    option_off = 0
+    option_all_except_pokemon_league = 1
+    option_all = 2
+    display_name = "Randomize Fly Locations"
+
+class RequireFlyItemsForFlight(Toggle):
+    """
+    Require the fly location item to fly to a certain location.
+    If this is false, then simply visiting the location will be sufficient.
+    """
+    display_name = "Require Fly Location Items for Flight"
+
+class DexsanityWhitelist(SpeciesBlacklist):
+    """
+    Specify the possible species which can be dexsanity locations.
+    This has precedence over the dexsanity blacklist.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    legendaries, all lowercase, will be interpreted as allowing all legendary
+    species.
+    """
+    display_name = "Dexsanity Whitelist"
+    valid_keys = list(species) + ["legendaries"]
+
+class DexsanityBlacklist(SpeciesBlacklist):
+    """
+    Specify the species which cannot be dexsanity locations.
+    The whitelist has precedence over this.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    legendaries, all lowercase, will be interpreted as banning all legendary
+    species.
+    """
+    display_name = "Dexsanity Blacklist"
+    valid_keys = list(species) + ["legendaries"]
+
+class DexsanityRequired(SpeciesBlacklist):
+    """
+    Specify the species which must be dexsanity locations.
+    This has precedence over the whitelist and blacklist.
+
+    The species names should be entered entirely in lowercase.
+    Spaces should be replaced by underscores. For example,
+    Mr. Mime would be mr_mime.
+
+    legendaries, all lowercase, will be interpreted as requiring all legendary
+    species.
+    """
+    display_name = "Dexsanity Required"
+    valid_keys = list(species) + ["legendaries"]
+
+class ItemNotificationsMask(OptionSet):
+    """
+    Which types of items should in-game notifications be shown for.
+    Valid options are all, progression, useful, and trap.
+
+    This option can also be modified in the in-game options menu.
+    """
+    display_name = "Item Notifications Mask"
+    valid_keys = ["progression", "useful", "trap", "all"]
+    default = {"progression", "useful"}
+    
+    def to_mask(self) -> int:
+        mask = 0
+        for index, key in enumerate(self.valid_keys):
+            if key in self:
+                mask |= 1 << index
+        return mask
+
+class PokemonPlatinumDeathLink(DeathLink):
+    __doc__ = DeathLink.__doc__ + "\n\n    In Pokémon Platinum, blacking out sends a death and receiving a death causes you to black out.\n" # type: ignore
+
+class DeathLinkGroup(FreeText):
+    """
+    The death link group to use. Death links are only sent within groups.
+    To interface with games which do not support groups, use the empty group "".
+    """
+    default = ""
+    display_name = "Death Link Group"
+
+
+class TMHMCompatibility(Choice):
+    """
+    Add TM/HM compatibility to all species.
+
+    Choices:
+    - none: the compatibility is unaffected
+    - hms: all species will be compatible with all HMs (and TM70 Flash)
+    - all: all species will be compatible with all TMs and HMs
+    """
+    display_name = "TM/HM Compatibility"
+    option_none = 0
+    option_hms = 1
+    option_all = 2
+    default = option_none
+
+class FastFishing(Toggle):
+    """
+    A QOL option to accelerate fishing encounters.
+
+    This option can be modified in-game.
+    """
+    display_name = "Fast Fishing"
+
+class Route210LowerBarricade(Choice):
+    """
+    What barricade is present between the lower part of Route 210 and the Route 210–215 junction.
+    """
+    # bottom three bits are map: none, bicycle slope, rock climb, surf, or waterfall
+    # three after are object event barricade: impassable, cut tree, rock smash, strength boulder, psyduck
+    option_none = 0b000000
+    option_bicycle_slope = 0b000001
+    option_rock_climb = 0b00010
+    option_surf = 0b00011
+    option_waterfall = 0b000100
+    option_impassable = 0b001000
+    option_cut_tree = 0b010000
+    option_rock_smash = 0b011000
+    option_strength_boulder = 0b100000
+    option_psyduck = 0b101000
+    option_bicycle_slope_and_cut_tree = 0b010001
+    option_bicycle_slope_and_rock_smash = 0b011001
+    option_bicycle_slope_and_strength_boulder = 0b100001
+    option_bicycle_slope_and_psyduck = 0b101001
+    option_rock_climb_and_cut_tree = 0b010010
+    option_rock_climb_and_rock_smash = 0b011010
+    option_rock_climb_and_strength_boulder = 0b100010
+    option_rock_climb_and_psyduck = 0b101010
+    option_surf_and_cut_tree = 0b010011
+    option_surf_and_rock_smash = 0b011011
+    option_surf_and_strength_boulder = 0b100011
+    option_surf_and_psyduck = 0b101011
+    option_waterfall_and_cut_tree = 0b010100
+    option_waterfall_and_rock_smash = 0b011100
+    option_waterfall_and_strength_boulder = 0b100100
+    option_waterfall_and_psyduck = 0b101100
+    default = option_none
+    display_name = "Route 210 Lower Barricade"
+
+class Route215Barricade(Choice):
+    """
+    What barricade is present to the west of Route 215, blocking the Route 210–215 junction.
+    """
+    # bottom three bits are map: none, bicycle bridge, rock climb, surf, or waterfall
+    # three after are object event barricade: impassable, cut tree, rock smash, strength boulder, psyduck
+    option_none = 0b000000
+    option_bicycle_bridge = 0b000001
+    option_rock_climb = 0b00010
+    option_surf = 0b00011
+    option_waterfall = 0b000100
+    option_impassable = 0b001000
+    option_cut_tree = 0b010000
+    option_rock_smash = 0b011000
+    option_strength_boulder = 0b100000
+    option_psyduck = 0b101000
+    option_bicycle_bridge_and_cut_tree = 0b010001
+    option_bicycle_bridge_and_rock_smash = 0b011001
+    option_bicycle_bridge_and_strength_boulder = 0b100001
+    option_bicycle_bridge_and_psyduck = 0b101001
+    option_rock_climb_and_cut_tree = 0b010010
+    option_rock_climb_and_rock_smash = 0b011010
+    option_rock_climb_and_strength_boulder = 0b100010
+    option_rock_climb_and_psyduck = 0b101010
+    option_surf_and_cut_tree = 0b010011
+    option_surf_and_rock_smash = 0b011011
+    option_surf_and_strength_boulder = 0b100011
+    option_surf_and_psyduck = 0b101011
+    option_waterfall_and_cut_tree = 0b010100
+    option_waterfall_and_rock_smash = 0b011100
+    option_waterfall_and_strength_boulder = 0b100100
+    option_waterfall_and_psyduck = 0b101100
+    default = option_none
+    display_name = "Route 215 Barricade"
+
+class PreventPoptrackerSpoiling(OptionSet):
+    """
+    The value of the barricades will be spoiled by the Poptracker by default.
+    It can be preferred to avoid this, if the options are weighted. This option
+    will prevent poptracker from spoiling these options until they are seen in-game.
+    Specify "all" for every barricade.
+
+    Options:
+    - route_207_barricade
+    - route_215_barricade
+    - route_210_lower_barricade
+    - boat_canalave_pastoria
+    - boat_canalave_snowpoint
+    - boat_pastoria_snowpoint
+    - pastoria_barriers
+    - early_sunyshore
+    """
+    default = []
+    valid_keys = {
+        "route_207_barricade",
+        "route_215_barricade",
+        "route_210_lower_barricade",
+        "boat_canalave_pastoria",
+        "boat_canalave_snowpoint",
+        "boat_pastoria_snowpoint",
+        "pastoria_barriers",
+        "early_sunyshore",
+        "all",
+    }
+
+    def export(self):
+        if "all" in self:
+            return set(PreventPoptrackerSpoiling.valid_keys) - {"all"}
+        else:
+            return self.value
+
+YES_NO_SHUFFLE = Literal["yes"] | Literal["no"] | Literal["shuffle"]
+
+class MoveRandomization(OptionDict):
+    """
+    Randomize properties of moves.
+    Each of the options can take one of three values: "no", "yes", "shuffle".
+    """
+    visibility = Visibility(0)
+    default = {
+        "type": "no",
+        "accuracy": "no",
+        "pp": "no",
+        "priority": "no",
+    }
+
+    type: YES_NO_SHUFFLE
+    accuracy: YES_NO_SHUFFLE
+    pp: YES_NO_SHUFFLE
+    priority: YES_NO_SHUFFLE
+
+    def __getattr__(self, name: str) -> Any:
+        if name in MoveRandomization.default:
+            v = self.get(name, MoveRandomization.default[name])
+            if isinstance(v, bool):
+                return "yes" if v else "no"
+            else:
+                return v
+        else:
+            raise AttributeError(name, self)
+
+slot_data_options: Sequence[str] = [
+    "hms",
+    "badges",
+    "overworlds",
+    "hiddens",
+    "npc_gifts",
+    "key_items",
+    "rods",
+    "poketch_apps",
+    "running_shoes",
+    "bicycle",
+    "pokedex",
+    "accessories",
+    "cartridges",
+    "time_items",
+
+    "remove_badge_requirements",
+    "visibility_hm_logic",
+    "dowsing_machine_logic",
+    "north_sinnoh_fly",
+    "poketch_route_203",
+    "regional_dex_goal",
+    "early_sunyshore",
+    "pastoria_barriers",
+    "reusable_tms",
+    "start_with_swarms",
+    "can_reset_legendaries_in_ap_helper",
+    "evo_items_shop_in_ap_helper",
+    "route_207_barricade",
+    "route_210_lower_barricade",
+    "route_215_barricade",
+    "boat_canalave_pastoria",
+    "boat_canalave_snowpoint",
+    "boat_pastoria_snowpoint",
+    
+    "hm_reader",
+    "hm_reader_mode",
+    "tmhm_compatibility",
+    
+    "randomize_fly_items",
+    "require_fly_items_for_flight",
+
+    "randomize_starters",
+    "require_two_level_evolution_starters",
+    "starter_whitelist",
+    "starter_blacklist",
+    "randomize_intro_mon",
+
+    "randomize_encounters",
+    "in_logic_encounters",
+    "encounter_species_blacklist",
+    "dexsanity",
+    "dexsanity_mode",
+    "dexsanity_whitelist",
+    "dexsanity_blacklist",
+    "dexsanity_required",
+    "in_logic_evolution_methods",
+
+    "randomize_roamers",
+    "roamer_blacklist",
+
+    "trainersanity",
+    "trainersanity_whitelist",
+    "trainersanity_blacklist",
+    "trainersanity_required",
+    "randomize_trainer_parties",
+    "trainer_party_blacklist",
+
+    "death_link",
+    "death_link_group",
+
+    "cheats_enabled",
+
+    "master_repel",
+    "s_s_ticket",
+    "marsh_pass",
+    "storage_key",
+    "bag",
+    "unown_option",
+
+    "remote_items",
+
+    "prevent_poptracker_spoiling",
+
+    "goal",
+]
+
+@dataclass
+class PokemonPlatinumOptions(PerGameCommonOptions):
+    goal: Goal
+
+    death_link: PokemonPlatinumDeathLink
+    death_link_group: DeathLinkGroup
+    remote_items: RemoteItems
+    cheats_enabled: CheatsEnabled
+
+    hms: RandomizeHms
+    badges: RandomizeBadges
+    overworlds: RandomizeOverworlds
+    hiddens: RandomizeHiddenItems
+    npc_gifts: RandomizeNpcGifts
+    key_items: RandomizeKeyItems
+    rods: RandomizeRods
+    poketch_apps: RandomizePoketchApps
+    running_shoes: RandomizeRunningShoes
+    bicycle: RandomizeBicycle
+    pokedex: RandomizePokedex
+    accessories: RandomizeAccessories
+    cartridges: RandomizeCartridges
+    time_items: RandomizeTimeItems
+
+    remove_badge_requirements: RemoveBadgeRequirement
+    visibility_hm_logic: VisibilityHmLogic
+    dowsing_machine_logic: DowsingMachineLogic
+    poketch_route_203: RequirePoketchCheckRoute203
+    regional_dex_goal: NationalDexNumMons
+    reusable_tms: ReusableTms
+    start_with_swarms: StartWithSwarms
+    can_reset_legendaries_in_ap_helper: CanResetLegendariesInAPHelper
+    evo_items_shop_in_ap_helper: EvoItemsShopInAPHelper
+
+    pastoria_barriers: PastoriaBarriers
+    north_sinnoh_fly: RequireFlyForNorthSinnoh
+    early_sunyshore: SunyshoreEarly
+    boat_canalave_pastoria: BoatCanalavePastoria
+    boat_canalave_snowpoint: BoatCanalaveSnowpoint
+    boat_pastoria_snowpoint: BoatPastoriaSnowpoint
+    route_207_barricade: Route207Barricade
+    route_210_lower_barricade: Route210LowerBarricade
+    route_215_barricade: Route215Barricade
+
+    randomize_fly_items: RandomizeFlyItems
+    require_fly_items_for_flight: RequireFlyItemsForFlight
+    
+    hm_reader: AddHMReader
+    hm_reader_mode: HMReaderMode
+    tmhm_compatibility: TMHMCompatibility
+
+    randomize_starters: RandomizeStarters
+    require_two_level_evolution_starters: RequireTwoLevelEvolutionStarters
+    starter_whitelist: StarterWhitelist
+    starter_blacklist: StarterBlacklist
+    randomize_intro_mon: RandomizeBunearyInIntro
+
+    randomize_encounters: RandomizeEncounters
+    in_logic_encounters: InLogicEncounters
+    encounter_species_blacklist: EncounterSpeciesBlacklist
+    dexsanity: DexsanityCount
+    dexsanity_mode: DexsanityMode
+    dexsanity_whitelist: DexsanityWhitelist
+    dexsanity_blacklist: DexsanityBlacklist
+    dexsanity_required: DexsanityRequired
+    in_logic_evolution_methods: InLogicEvolutionMethods
+
+    randomize_roamers: RandomizeRoamers
+    roamer_blacklist: RoamerBlacklist
+
+    trainersanity: TrainersanityCount
+    trainersanity_whitelist: TrainersanityWhitelist
+    trainersanity_blacklist: TrainersanityBlacklist
+    trainersanity_required: TrainersanityRequired
+    randomize_trainer_parties: RandomizeTrainerParties
+    trainer_party_blacklist: TrainerPartyBlacklist
+    move_randomization: MoveRandomization
+
+    game_options: GameOptions
+    blind_trainers: BlindTrainers
+    hm_cut_ins: HMCutIns
+    fps60: FPS60
+    buck_pos: BuckPos
+    hb_speed: HBSpeed
+    normalize_encounters: NormalizeEncounters
+    instant_text: InstantText
+    hold_a_to_advance: HoldAToAdvance
+    always_catch: AlwaysCatch
+    guaranteed_escape: GuaranteedEscape
+    talk_trainers_without_fight: TalkTrainersWithoutFight
+    exp_multiplier: ExpMultiplier
+    item_notifications_mask: ItemNotificationsMask
+    fast_fishing: FastFishing
+
+    master_repel: AddMasterRepel
+    s_s_ticket: AddSSTicket
+    marsh_pass: AddMarshPass
+    storage_key: AddStorageKey
+    bag: AddBag
+    unown_option: UnownsOption
+
+    prevent_poptracker_spoiling: PreventPoptrackerSpoiling
+
+    start_inventory_from_pool: StartInventoryPool
+
+    def requires_badge(self, hm: str) -> bool:
+        return "all" not in self.remove_badge_requirements and hm.lower() not in self.remove_badge_requirements
+
+    def fight_area_requires_national_dex(self) -> bool:
+        return not self.randomize_fly_items.value
+
+    def validate(self) -> None:
+        if self.pastoria_barriers and self.randomize_fly_items.value == 0:
+            if not self.badges and self.requires_badge("SURF"):
+                raise OptionError(f"cannot enable Pastoria barriers if Surf requires the Fen Badge and badges are not randomized.")
+            if not (self.hms or self.key_items):
+                raise OptionError(f"cannot enable Pastoria barriers if HMs, Key Items, Fly Locations are not randomized.")
+        if not (self.overworlds or self.hiddens or self.npc_gifts or self.key_items or self.poketch_apps):
+            raise OptionError(f"at least one of overworlds, hiddens, npc_gifts, key_items, or poketch apps must be enabled")
+
+        # validate game options
+        game_opts = self.game_options
+        if game_opts.default_gender not in {"male", "female", "random", "vanilla"}:
+            raise OptionError(f"invalid default gender: \"{game_opts.default_gender}\"")
+        if game_opts.text_speed not in {"fast", "slow", "mid"}:
+            raise OptionError(f"invalid text speed: \"{game_opts.text_speed}")
+        if game_opts.sound not in {"mono", "stereo"}:
+            raise OptionError(f"invalid sound: \"{game_opts.sound}\"")
+        if game_opts.battle_scene not in {False, "off", True, "on"}:
+            raise OptionError(f"invalid battle scene: \"{game_opts.battle_scene}\"")
+        if game_opts.battle_style not in {"set", "shift"}:
+            raise OptionError(f"invalid battle style: \"{game_opts.battle_style}\"")
+        if game_opts.button_mode not in {"start=x", "l=a", "normal"}:
+            raise OptionError(f"invalid button mode: \"{game_opts.button_mode}\"")
+        text_frame = game_opts.text_frame
+        if game_opts.text_frame not in set(range(1, 21)) | {"random"}:
+            raise OptionError(f"invalid text frame: \"{text_frame}\"")
+        if game_opts.received_items_notification not in {"none", "nothing", "message", "jingle"}:
+            raise OptionError(f"invalid received items notification: \"{game_opts.received_items_notification}\"")
+        if game_opts.name_strictness not in {"relaxed", "strict"}:
+            raise OptionError(f"invalid name strictness: \"{game_opts.name_strictness}\"")
+        self.exp_multiplier.to_bytes()
+
+        if not self.randomize_encounters:
+            if not {"great_marsh_observatory_national_dex", "munchlax_honey_tree"} <= self.in_logic_encounters.methods():
+                raise OptionError("if encounters are not randomized, then great_marsh_observatory_national_dex and munchlax_honey_tree must both be in logic")
+            elif not "level_happiness" in self.in_logic_evolution_methods.methods():
+                raise OptionError("if encounters are not randomized, then level_happiness must be an in-logic evolution method")
+        else:
+            if "level_happiness" in self.in_logic_evolution_methods.methods():
+                if {"munchlax", "snorlax"} <= self.encounter_species_blacklist.blacklist():
+                    raise OptionError("one of munchlax or snorlax must not be in encounter_species_blacklist")
+            else:
+                if {"snorlax"} <= self.encounter_species_blacklist.blacklist():
+                    raise OptionError("without level_happiness in logic, snorlax cannot be in the encounter species blacklist")
+        rm_set = frozenset(regional_mons)
+        if self.randomize_encounters and self.randomize_trainer_parties and len(rm_set - (self.encounter_species_blacklist.blacklist() & self.trainer_party_blacklist.blacklist())) < max(50, self.regional_dex_goal.value):
+            raise OptionError(f"encounter species blacklist and trainer party blacklist are too restrictive: can't get enough regional species. number of regional encounters possible: {len(rm_set - (self.encounter_species_blacklist.blacklist() & self.trainer_party_blacklist.blacklist()))}")
+        elif self.randomize_encounters:
+            if not self.pokedex:
+                in_logic_trainer_mons = {p.species
+                    for rd in regions.values()
+                    for trainer in rd.trainers
+                    if not trainer_requires_national_dex(trainer) \
+                        and not (trainer_in_fight_area(trainer) and self.fight_area_requires_national_dex())
+                    for p in trainer_party_supporting_starters(trainer)
+                    if p.species in rm_set
+                }
+                if len(expand_set_via_evolutions(rm_set - self.encounter_species_blacklist.blacklist(), self.in_logic_evolution_methods.methods()) - in_logic_trainer_mons) <  self.regional_dex_goal.value - len(in_logic_trainer_mons):
+                    raise OptionError(f"encounter species blacklist is too restrictive: can't get enough regional species.")
+            in_logic_trainer_mons = {p.species
+                for rd in regions.values()
+                for trainer in rd.trainers
+                for p in trainer_party_supporting_starters(trainer)
+                if p.species in rm_set
+            }
+            if len(expand_set_via_evolutions(rm_set - self.encounter_species_blacklist.blacklist(), self.in_logic_evolution_methods.methods()) - in_logic_trainer_mons) < max(50, self.regional_dex_goal.value) - len(in_logic_trainer_mons):
+                raise OptionError(f"encounter species blacklist is too restrictive: can't get enough regional species. number of regional encounters possible: {len(rm_set - self.encounter_species_blacklist.blacklist() - in_logic_trainer_mons) + len(in_logic_trainer_mons)}")
+        elif self.randomize_trainer_parties:
+            if not self.pokedex:
+                acc_suc = set() if self.start_with_swarms else {"swarms"}
+                in_logic_encounter_mons = expand_set_via_evolutions({slot.species
+                    for rd in regions.values()
+                    if rd.header in encounters \
+                        and rd.header not in national_dex_requiring_encs \
+                        and not (rd.header in fight_area_encs and self.fight_area_requires_national_dex())
+                    for type, table in encounter_type_pairs
+                    if type != "water" or table in self.in_logic_encounters.methods()
+                    for _, slot in enumerate(getattr(encounters[rd.header], table))
+                    if not slot.accessibility or (set(slot.accessibility) - acc_suc) & self.in_logic_encounters.methods()
+                    if slot.species in rm_set
+                } | {spec
+                    for nm in ["regular_honey_tree", "munchlax_honey_tree", "trophy_garden", "great_marsh_observatory", "great_marsh_observatory_national_dex", "feebas_fishing", "odd_keystone"]
+                    if nm in self.in_logic_encounters.methods() and nm not in special_encounters.requiring_national_dex
+                    for spec in getattr(special_encounters, nm)
+                    if spec in rm_set
+                }, self.in_logic_evolution_methods.methods())
+                if len(rm_set - self.trainer_party_blacklist.blacklist() - in_logic_encounter_mons) < self.regional_dex_goal.value - len(in_logic_encounter_mons):
+                    raise OptionError(f"trainer party blacklist is too restrictive: can't get enough regional species. number of regional encounters possible: {len(rm_set - self.trainer_party_blacklist.blacklist() - in_logic_encounter_mons) + len(in_logic_encounter_mons)}")
+            in_logic_encounter_mons = expand_set_via_evolutions({slot.species
+                for rd in regions.values()
+                if rd.header in encounters \
+                for type, table in encounter_type_pairs
+                if type != "water" or table in self.in_logic_encounters.methods()
+                for _, slot in enumerate(getattr(encounters[rd.header], table))
+                if not slot.accessibility or set(slot.accessibility) & self.in_logic_encounters.methods()
+                if slot.species in rm_set
+            } | {spec
+                for nm in ["regular_honey_tree", "munchlax_honey_tree", "trophy_garden", "great_marsh_observatory", "great_marsh_observatory_national_dex", "feebas_fishing", "odd_keystone"]
+                if nm in self.in_logic_encounters.methods()
+                for spec in getattr(special_encounters, nm)
+                if spec in rm_set
+            }, self.in_logic_evolution_methods.methods())
+            if len(rm_set - self.trainer_party_blacklist.blacklist() - in_logic_encounter_mons) < max(50, self.regional_dex_goal.value) - len(in_logic_encounter_mons):
+                raise OptionError(f"trainer party blacklist is too restrictive: can't get enough regional species. number of regional encounters possible: {len(rm_set - self.trainer_party_blacklist.blacklist() - in_logic_encounter_mons) + len(in_logic_encounter_mons)}")
+        else:
+            if not self.pokedex:
+                acc_suc = set() if self.start_with_swarms else {"swarms"}
+                in_logic_encounter_mons = {slot.species
+                    for rd in regions.values()
+                    if rd.header in encounters \
+                        and rd.header not in national_dex_requiring_encs \
+                        and not (rd.header in fight_area_encs and self.fight_area_requires_national_dex())
+                    for type, table in encounter_type_pairs
+                    if type != "water" or table in self.in_logic_encounters.methods()
+                    for slot in getattr(encounters[rd.header], table)
+                    if not slot.accessibility or (set(slot.accessibility) - acc_suc) & self.in_logic_encounters.methods()
+                    if slot.species in rm_set
+                }
+                in_logic_trainer_mons = {p.species
+                    for rd in regions.values()
+                    for trainer in rd.trainers
+                    if not trainer_requires_national_dex(trainer)
+                        and not (trainer_in_fight_area(trainer) and self.fight_area_requires_national_dex())
+                    for p in trainer_party_supporting_starters(trainer)
+                    if p.species in rm_set
+                }
+                if len(expand_set_via_evolutions(in_logic_encounter_mons, self.in_logic_evolution_methods.methods()) | in_logic_trainer_mons) < self.regional_dex_goal.value:
+                    raise OptionError(f"regional dex goal is too high. not enough encounters to fill it. number of regional encounters possible: {len(in_logic_encounter_mons | in_logic_trainer_mons)}")
+            in_logic_encounter_mons = {slot.species
+                for rd in regions.values()
+                if rd.header in encounters \
+                for type, table in encounter_type_pairs
+                if type != "water" or table in self.in_logic_encounters.methods()
+                for slot in getattr(encounters[rd.header], table)
+                if not slot.accessibility or set(slot.accessibility) & self.in_logic_encounters.methods()
+                if slot.species in rm_set
+            }
+            in_logic_trainer_mons = {p.species
+                for rd in regions.values()
+                for trainer in rd.trainers
+                for p in trainer_party_supporting_starters(trainer)
+                if p.species in rm_set
+            }
+            if len(expand_set_via_evolutions(in_logic_encounter_mons, self.in_logic_evolution_methods.methods()) | in_logic_trainer_mons) < max(50, self.regional_dex_goal.value):
+                raise OptionError(f"regional dex goal is too high. not enough encounters to fill it. number of regional encounters possible: {len(in_logic_encounter_mons | in_logic_trainer_mons)}")
+        if self.randomize_encounters:
+            amity_square_mons = {
+                "pikachu",
+                "clefairy",
+                "jigglypuff",
+                "psyduck",
+                "torchic",
+                "shroomish",
+                "skitty",
+                "turtwig",
+                "grotle",
+                "torterra",
+                "chimchar",
+                "monferno",
+                "infernape",
+                "piplup",
+                "prinplup",
+                "empoleon",
+                "pachirisu",
+                "drifloon",
+                "buneary",
+                "happiny",
+            } - self.encounter_species_blacklist.blacklist()
+            if not amity_square_mons:
+                raise OptionError("at least one Amity Square species must be able to be encountered")
+        if self.dexsanity:
+            if self.randomize_encounters:
+                possible_species = expand_set_via_evolutions(species.keys() - self.encounter_species_blacklist.blacklist(), self.in_logic_evolution_methods.methods())
+                if len(self.dexsanity_required.blacklist() - possible_species) > 0:
+                    raise OptionError(f"the following species are required dexsanity locations, but are not possible: {', '.join(self.dexsanity_required.blacklist() - possible_species)}")
+                possible_species -= self.dexsanity_required.blacklist()
+                if len(self.dexsanity_whitelist.blacklist()) > 0:
+                    possible_species &= self.dexsanity_whitelist.blacklist()
+                else:
+                    possible_species -= self.dexsanity_blacklist.blacklist()
+                if len(possible_species) + len(self.dexsanity_required.blacklist()) < self.dexsanity:
+                    raise OptionError(f"dexsanity count larger than number of available species. number of available species: {len(possible_species)}")
+            else:
+                in_logic_encounter_mons = {slot.species
+                    for rd in regions.values()
+                    if rd.header in encounters \
+                    for type, table in encounter_type_pairs
+                    if type != "water" or table in self.in_logic_encounters.methods()
+                    for _, slot in enumerate(getattr(encounters[rd.header], table))
+                    if not slot.accessibility or set(slot.accessibility) & self.in_logic_encounters.methods()
+                } | {spec
+                    for nm in {"regular_honey_tree", "munchlax_honey_tree", "trophy_garden", "great_marsh_observatory", "great_marsh_observatory_national_dex", "feebas_fishing", "odd_keystone"} & self.in_logic_encounters.methods()
+                    for spec in getattr(special_encounters, nm)
+                }
+                in_logic_encounter_mons = expand_set_via_evolutions(in_logic_encounter_mons, self.in_logic_evolution_methods.methods())
+                if len(self.dexsanity_required.blacklist() - in_logic_encounter_mons) > 0:
+                    raise OptionError(f"the following species are required dexsanity locations, but are not possible: {', '.join(self.dexsanity_required.blacklist() - in_logic_encounter_mons)}")
+                in_logic_encounter_mons -= self.dexsanity_required.blacklist()
+                if len(self.dexsanity_whitelist.blacklist()) > 0:
+                    in_logic_encounter_mons &= self.dexsanity_whitelist.blacklist()
+                else:
+                    in_logic_encounter_mons -= self.dexsanity_blacklist.blacklist()
+                if len(in_logic_encounter_mons) + len(self.dexsanity_required.blacklist()) < self.dexsanity:
+                    raise OptionError(f"dexsanity count larger than in-logic species count. number of in-logic species: {len(in_logic_encounter_mons)}")
+        if len(self.dexsanity_required.blacklist()) > self.dexsanity.value:
+            raise OptionError(f"more dexsanity locations are required ({len(self.dexsanity_required.blacklist())}) than alloted ({self.dexsanity.value})")
+        if self.randomize_roamers and len(species.keys() - self.roamer_blacklist.blacklist()) < 5:
+            raise OptionError(f"roamer blacklist too restrictive")
+
+        if self.randomize_starters:
+            if 0 < len(self.starter_whitelist.value) < 3:
+                raise OptionError(f"starter whitelist must contain at least three values")
+            elif len(self.starter_whitelist.value) == 0:
+                species_set = having_two_level_evos if self.require_two_level_evolution_starters else species.keys()
+                if len(species_set - self.starter_blacklist.blacklist()) < 3:
+                    raise OptionError(f"starter blacklist too restrictive")
+        if 0 < len(self.trainersanity_whitelist.value):
+            if len(self.trainersanity_whitelist.value | self.trainersanity_required.value) < self.trainersanity.value:
+                raise OptionError("trainersanity whitelist does not have enough trainers")
+        elif len((set(in_game_trainer_labels) - self.trainersanity_blacklist.value) | self.trainersanity_required.value) < self.trainersanity.value:
+            raise OptionError("trainersanity blacklist is too restrictive")
+        if len(self.trainersanity_required.value) > self.trainersanity.value:
+            raise OptionError(f"more trainersanity locations are required ({len(self.trainersanity_required.value)}) than alloted ({self.trainersanity.value})")
+
+        if self.move_randomization.keys() - MoveRandomization.default.keys():
+            raise OptionError(f"unknown move randomization keys: {self.move_randomization.keys() - MoveRandomization.default.keys()}")
+        else:
+            for k, v in self.move_randomization.items():
+                if not isinstance(v, bool) and v not in {"no", "yes", "shuffle"}:
+                    raise OptionError(f"invalid move randomization choice for {k}: {v}")
+
+    def save_options(self) -> MutableMapping[str, Any]:
+        def exported_opt(name: str) -> Any:
+            opt = getattr(self, name)
+            if hasattr(opt, "export"):
+                return opt.export()
+            else:
+                return opt.value
+        return {k:exported_opt(k) for k in slot_data_options}
+
+    def load_options(self, slot_data: Mapping[str, Any]) -> None:
+        for key in slot_data_options:
+            if isinstance(getattr(self, key), OptionSet):
+                getattr(self, key).value = frozenset(slot_data[key])
+            else:
+                getattr(self, key).value = slot_data[key]
+
+OPTION_GROUPS = [
+    OptionGroup(
+        "Item Shuffles",
+        [
+            RandomizeOverworlds,
+            RandomizeHiddenItems,
+            RandomizeNpcGifts,
+            RandomizeKeyItems,
+            RandomizeHms,
+            RandomizeBadges,
+            RandomizeRods,
+            RandomizeBicycle,
+            AddBag,
+            RandomizeRunningShoes,
+            RandomizePoketchApps,
+            RandomizeCartridges,
+            RandomizePokedex,
+            RandomizeAccessories,
+            RandomizeTimeItems,
+            RandomizeFlyItems,
+        ],
+    ),
+    OptionGroup(
+        "Logic Tweaks",
+        [
+            RequirePoketchCheckRoute203,
+            RequireFlyForNorthSinnoh,
+            VisibilityHmLogic,
+            DowsingMachineLogic,
+            AddMarshPass,
+            AddStorageKey,
+            AddSSTicket,
+            UnownsOption,
+        ],
+    ),
+    OptionGroup(
+        "Roadblock Tweaks",
+        [
+            PastoriaBarriers,
+            SunyshoreEarly,
+            BoatCanalavePastoria,
+            BoatCanalaveSnowpoint,
+            BoatPastoriaSnowpoint,
+            Route207Barricade,
+            Route210LowerBarricade,
+            Route215Barricade,
+        ],
+    ),
+    OptionGroup(
+        "Starters",
+        [
+            RandomizeStarters,
+            RequireTwoLevelEvolutionStarters,
+            StarterWhitelist,
+            StarterBlacklist,
+            RandomizeBunearyInIntro,
+        ],
+    ),
+    OptionGroup(
+        "Pokémon",
+        [
+            RandomizeEncounters,
+            InLogicEncounters,
+            EncounterSpeciesBlacklist,
+            DexsanityCount,
+            DexsanityMode,
+            DexsanityBlacklist,
+            DexsanityWhitelist,
+            DexsanityRequired,
+            InLogicEvolutionMethods,
+            EvoItemsShopInAPHelper,
+            ReusableTms,
+            NationalDexNumMons,
+            StartWithSwarms,
+            RandomizeRoamers,
+            RoamerBlacklist,
+            CanResetLegendariesInAPHelper,
+            MoveRandomization
+        ],
+    ),
+    OptionGroup(
+        "Trainers",
+        [
+            TrainersanityCount,
+            TrainersanityWhitelist,
+            TrainersanityBlacklist,
+            TrainersanityRequired,
+            RandomizeTrainerParties,
+            TrainerPartyBlacklist,
+        ],
+    ),
+    OptionGroup(
+        "HMs",
+        [
+            RemoveBadgeRequirement,
+            AddHMReader,
+            HMReaderMode,
+            TMHMCompatibility,
+        ],
+    ),
+    OptionGroup(
+        "Quality of Life",
+        [
+            GameOptions,
+            BlindTrainers,
+            HMCutIns,
+            FPS60,
+            BuckPos,
+            HBSpeed,
+            NormalizeEncounters,
+            InstantText,
+            HoldAToAdvance,
+            AlwaysCatch,
+            GuaranteedEscape,
+            TalkTrainersWithoutFight,
+            ExpMultiplier,
+            AddMasterRepel,
+            RequireFlyItemsForFlight,
+            ItemNotificationsMask,
+            FastFishing,
+            PreventPoptrackerSpoiling,
+        ],
+    ),
+]

@@ -1,0 +1,20 @@
+"""This module defines constants for Trophy locations"""
+
+
+class RAC3TROPHY:
+    """String constants for Trophy locations"""
+    FLORANA_RATCHET = "Florana: Trophy: 2nd Building Upstairs North-East"
+    TYHRRANOSIS_AL = "Tyhrranosis: Trophy: North East Pillar"
+    DAXX_PLUMBER = "Daxx: Trophy: Ledge overlooking Ship"
+    HOLOSTAR_CLANK = "Holostar: Trophy: After tall Elevator"
+    METROPOLIS_SKRUNCH = "Metropolis: Trophy: 2nd Building Window"
+    CRASH_NEFARIOUS = "Crash Site: Trophy: Near first corner"
+    HIDEOUT_QWARK = "Qwarks Hideout: Trophy: Outside Qwarks Room"
+    KOROS_COURTNEY = "Koros: Trophy: Glass House"
+    COMMAND_LAWRENCE = "Command Center: Trophy: Up a Ladder"
+    PHOENIX_TITANIUM_COLLECTOR = "Phoenix: Long Term Trophy: Titanium Collector"
+    PHOENIX_FRIEND_OF_THE_RANGERS = "Phoenix: Long Term Trophy: Friend of the Rangers"
+    PHOENIX_ANNIHILATION_NATION_CHAMPION = "Phoenix: Long Term Trophy: Annihilation Nation Champion"
+    PHOENIX_SKILL_MASTER = "Phoenix: Long Term Trophy: Skill Master"
+    PHOENIX_NANO_FINDER = "Phoenix: Long Term Trophy: Nanofinder"
+    PHOENIX_OMEGA_ARSENAL = "Phoenix: Long Term Trophy: Omega Arsenal"
