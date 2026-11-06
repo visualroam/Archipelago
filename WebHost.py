@@ -89,6 +89,8 @@ def copy_tutorials_files_to_static() -> None:
                             f.write(zf.read(zfile))
         else:
             source_path = Utils.local_path(os.path.dirname(world.__file__), "docs")
+            if not os.path.isdir(source_path):  # AF-Patch: Community-Worlds ohne docs/ nicht crashen lassen
+                continue
             files = os.listdir(source_path)
             for file in files:
                 shutil.copyfile(Utils.local_path(source_path, file),
@@ -111,6 +113,11 @@ if __name__ == "__main__":
         logging.warning("Could not update LttP sprites.")
     app = get_app()
     from worlds import AutoWorldRegister, network_data_package
+    # AF-Patch: Community-Worlds ohne `tutorials` (z. B. smo, minecraft_fabric) nicht verwerfen, sondern ohne Anleitung
+    # laden – sonst kann der WebHost ihre YAMLs nicht prüfen/generieren.
+    for world in AutoWorldRegister.world_types.values():
+        if not hasattr(world.web, "tutorials"):
+            world.web.tutorials = []
     # Update to only valid WebHost worlds
     invalid_worlds = {name for name, world in AutoWorldRegister.world_types.items()
                       if not hasattr(world.web, "tutorials")}

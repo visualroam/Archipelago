@@ -473,8 +473,9 @@ class RestrictedUnpickler(pickle.Unpickler):
         # pep 8 specifies that modules should have "all-lowercase names" (options, not Options)
         # AF-Patch: Elden Ring (Alaric) definiert Options in core.py / features/*.py statt options.py.
         # Nur dieses World-Paket, und weiterhin nur echte Option-Klassen (issubclass-Check unten).
+        # AF-Patch: unsere eigenen Worlds (worlds.af_*) definieren ihre Options direkt in __init__.py.
         if module.lower().endswith("options") or module == "worlds.eldenring.core" \
-                or module.startswith("worlds.eldenring.features."):
+                or module.startswith("worlds.eldenring.features.") or module.startswith("worlds.af_"):
             if module == "Options":
                 mod = self.options_module
             else:
