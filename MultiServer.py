@@ -2537,6 +2537,28 @@ class ServerCommandProcessor(CommonCommandProcessor):
         update_client_status(self.ctx, target, ClientStatus.CLIENT_GOAL)
         return True
 
+    def _cmd_send_location_ids(self, player_name: str, *location_ids: str) -> bool:
+        """AF Charity: Viele Locations eines Slots auf einmal abhaken (per ID) – z. B. eine ganze Sphere freigeben,
+        wenn ein Streamer ausfällt. Nur IDs, die zu diesem Slot gehören; schon erledigte werden ignoriert.
+        Usage: /send_location_ids <player> <id> [<id> ...]"""
+        resolved = self.resolve_player(player_name)
+        if not resolved:
+            self.output(f"Unknown or ambiguous player: {player_name}")
+            return False
+        team, slot, name = resolved
+        try:
+            wanted = {int(x) for x in location_ids}
+        except ValueError:
+            self.output("Location IDs must be numbers")
+            return False
+        valid = wanted & set(self.ctx.locations[slot])
+        if not valid:
+            self.output(f"No matching locations for {name}")
+            return False
+        register_location_checks(self.ctx, team, slot, sorted(valid))
+        self.output(f"{name}: {len(valid)} location(s) checked by admin")
+        return True
+
     def _cmd_send_multiple(self, amount: typing.Union[int, str], player_name: str, *item_name: str) -> bool:
         """Sends multiples of an item to the specified player"""
         seeked_player, usable, response = get_intended_text(player_name, self.ctx.player_names.values())

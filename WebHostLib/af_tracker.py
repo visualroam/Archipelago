@@ -616,6 +616,54 @@ def af_admin_data(tracker: UUID):
     return jsonify(ok=True, **admin_overview(TrackerData(room)))
 
 
+@app.route("/tracker/<suuid:tracker>/<int:team>/<int:player>/release", methods=["POST"])
+def af_release(tracker: UUID, team: int, player: int):
+    """Admin: offene Checks eines Slots freigeben – eine Sphere, alle bis zu einer Sphere oder den ganzen Rest.
+    Gedacht für Streamer, die ausfallen (wie AP-Dropbot, nur per Klick)."""
+    from .tracker import TrackerData
+
+    room = Room.get(tracker=tracker)
+    if room is None:
+        abort(404)
+    data = request.get_json(silent=True) or {}
+    if not is_admin(room, str(data.get("key", ""))):
+        return jsonify(ok=False, error="Admin-Link ungültig"), 403
+    tracker_data = TrackerData(room)
+    if player not in tracker_data._multidata["slot_info"] or team != 0:
+        abort(404)
+    name = tracker_data.get_player_name(player)
+    mode = data.get("mode")
+    open_ids = set(tracker_data.get_player_locations(player)) - tracker_data.get_player_checked_locations(team, player)
+    if not open_ids:
+        return jsonify(ok=True, count=0)
+
+    if mode == "all":
+        command, count = f"/release {shlex.quote(name)}", len(open_ids)
+    elif mode in ("sphere", "upto"):
+        try:
+            target = int(data.get("sphere"))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Sphere fehlt"), 400
+        sphere_of = {}
+        for index, sphere in enumerate(tracker_data.get_spheres()):
+            for location in sphere.get(player, ()):
+                sphere_of[location] = index
+        ids = sorted(i for i in open_ids if i in sphere_of
+                     and (sphere_of[i] == target if mode == "sphere" else sphere_of[i] <= target))
+        if not ids:
+            return jsonify(ok=True, count=0)
+        command, count = f"/send_location_ids {shlex.quote(name)} " + " ".join(map(str, ids)), len(ids)
+    else:
+        return jsonify(ok=False, error="mode muss sphere, upto oder all sein"), 400
+
+    Command(room=room, commandtext=command)
+    now = utcnow()
+    if now - room.last_activity > datetime.timedelta(minutes=1):
+        room.last_activity = now
+    commit()
+    return jsonify(ok=True, count=count)
+
+
 def admin_overview(tracker_data, team: int = 0) -> Dict[str, Any]:
     """Alle Slots + Engpässe. Spoiler-lastig, daher nur über den Admin-Schlüssel."""
     names = tracker_data.get_room_long_player_names()
@@ -633,6 +681,7 @@ def admin_overview(tracker_data, team: int = 0) -> Dict[str, Any]:
                 sphere_of[slot, location] = index
 
     checked = {p: tracker_data.get_player_checked_locations(team, p) for p in all_players}
+    slot_spheres = collections.defaultdict(lambda: collections.defaultdict(lambda: [0, 0]))  # Slot → Sphere → [erl., ges.]
     waiting = collections.defaultdict(collections.Counter)   # Empfänger → {Halter: Anzahl}
     holding = collections.defaultdict(collections.Counter)   # Halter → {Empfänger: Anzahl}
     open_prog = []                                           # alle offenen Fortschritts-Checks
@@ -645,6 +694,8 @@ def admin_overview(tracker_data, team: int = 0) -> Dict[str, Any]:
             if sphere is not None:
                 spheres[sphere][1] += 1
                 spheres[sphere][0] += done
+                slot_spheres[p][sphere][1] += 1
+                slot_spheres[p][sphere][0] += done
             if done or not flags & FLAG_PROGRESSION:
                 continue
             holding[p][receiver] += 1
@@ -681,6 +732,7 @@ def admin_overview(tracker_data, team: int = 0) -> Dict[str, Any]:
             "holding_for": [{"slot": r, "name": names[(team, r)], "count": c}
                             for r, c in holding[p].most_common() if r != p][:5],
             "next": next((e for e in open_prog if e["slot"] == p), None),
+            "spheres": [{"index": i, "done": d, "total": t} for i, (d, t) in sorted(slot_spheres[p].items())],
             "logic": None,
         }
         inventory = inventory_by_name(tracker_data, team, p)

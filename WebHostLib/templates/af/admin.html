@@ -64,6 +64,17 @@ table.hang a:hover { color: var(--yellow); }
 .acts .ghost { background: var(--ink); color: var(--white); box-shadow: 3px 3px 0 var(--white); border: 2px solid var(--white); }
 table.hang button:disabled, .acts button:disabled { opacity: .4; }
 .updated { font-size: 12px; color: var(--dim); margin-top: 10px; }
+.sph-label { font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.sph-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
+.sph { position: relative; width: 26px; height: 26px; border-radius: 4px; border: 2px solid var(--track); background: var(--ink);
+  overflow: hidden; cursor: pointer; padding: 0; font: 700 10px Poppins, sans-serif; color: var(--white); }
+.sph > i { position: absolute; left: 0; right: 0; bottom: 0; background: var(--yellow); opacity: .85; }
+.sph > b { position: relative; z-index: 1; text-shadow: 0 0 3px #000; }
+.sph.done { border-color: var(--yellow); cursor: default; }
+.sph.front { border-color: var(--cyan); }
+.sph.sel { outline: 2px solid var(--white); outline-offset: 1px; }
+.sph-panel { margin-top: 8px; padding: 10px 12px; border-radius: 8px; background: #1a1a1a; font-size: 12px; color: var(--muted); display: grid; gap: 8px; }
+.sph-panel .acts { margin: 0; }
 </style>
 
 <div class="topnav">
@@ -109,6 +120,7 @@ table.hang button:disabled, .acts button:disabled { opacity: .4; }
     }
 
     let graphMode = "now";
+    let selected = null;   // gewählte Sphere-Kachel {slot, sphere}
     function graph(d) {
         const edgeList = graphMode === "now" ? d.edges_now : d.edges;
         const slots = d.slots.slice().sort((a, b) => a.name.localeCompare(b.name, "de"));
@@ -185,9 +197,28 @@ table.hang button:disabled, .acts button:disabled { opacity: .4; }
                 ${flags.length ? `<div class="flags">${flags.join("")}</div>` : ""}
                 <div class="who">Wartet auf ${s.waiting} wichtige Items${waitOn ? ": " + waitOn : ""}<br>
                     Hält ${s.holding} wichtige Items für andere${holdFor ? ": " + holdFor : ""}</div>
+                <div><div class="sph-label">Freigeben nach Sphere</div>
+                    <div class="sph-row">${s.spheres.map(sp => {
+                        const full = sp.done >= sp.total;
+                        const sel = selected && selected.slot === s.player && selected.sphere === sp.index;
+                        return `<button type="button" class="sph ${full ? "done" : ""} ${sp.index === r.frontier ? "front" : ""} ${sel ? "sel" : ""}"
+                            data-sph-slot="${s.player}" data-sph="${sp.index}" ${full ? "disabled" : ""}
+                            title="Sphere ${sp.index + 1}: ${sp.done}/${sp.total} erledigt"><i style="height:${sp.total ? 100 * sp.done / sp.total : 0}%"></i><b>${sp.index + 1}</b></button>`;
+                    }).join("")}</div>
+                    ${selected && selected.slot === s.player ? (() => {
+                        const sp = s.spheres.find(x => x.index === selected.sphere);
+                        const only = sp ? sp.total - sp.done : 0;
+                        const upto = s.spheres.filter(x => x.index <= selected.sphere).reduce((n, x) => n + x.total - x.done, 0);
+                        return `<div class="sph-panel">Sphere ${selected.sphere + 1} bei <b style="color:var(--white)">${esc(s.name)}</b> freigeben – Items gehen sofort an ihre Empfänger.
+                            <div class="acts">
+                                <button type="button" data-rel="sphere" data-slot="${s.player}" data-sphere="${selected.sphere}" data-count="${only}" data-slot-name="${esc(s.name)}">Nur Sphere ${selected.sphere + 1} (${only})</button>
+                                ${upto > only ? `<button type="button" data-rel="upto" data-slot="${s.player}" data-sphere="${selected.sphere}" data-count="${upto}" data-slot-name="${esc(s.name)}">Sphere 1–${selected.sphere + 1} (${upto})</button>` : ""}
+                                <button type="button" class="ghost" data-sph-cancel="1">Abbrechen</button></div></div>`;
+                    })() : ""}</div>
                 ${s.next ? `<div class="nextchk">Nächster wichtiger Check (Sphere ${s.next.sphere + 1}): <b>${esc(s.next.location)}</b><br>→ ${esc(s.next.item)} für ${esc(s.next.receiver_name)}</div>` : ""}
                 <div class="acts"><a href="${slotUrl(s.player)}">Tracker · Abhaken</a>
-                    ${s.status_class !== "goal" ? `<button type="button" class="ghost" data-goal="${s.player}" data-slot-name="${esc(s.name)}">Ziel melden</button>` : ""}</div>
+                    ${s.status_class !== "goal" ? `<button type="button" class="ghost" data-goal="${s.player}" data-slot-name="${esc(s.name)}">Ziel melden</button>` : ""}
+                    ${s.done < s.total ? `<button type="button" class="ghost" data-rel="all" data-slot="${s.player}" data-count="${s.total - s.done}" data-slot-name="${esc(s.name)}">Rest freigeben (${s.total - s.done})</button>` : ""}</div>
             </div>`;
         }).join("");
 
@@ -249,6 +280,29 @@ table.hang button:disabled, .acts button:disabled { opacity: .4; }
         const b = e.target.closest(".graph-mode button");
         if (!b) return;
         graphMode = b.dataset.mode; render();
+    });
+
+    document.addEventListener("click", async e => {
+        const chip = e.target.closest("[data-sph]");
+        if (chip) { selected = { slot: Number(chip.dataset.sphSlot), sphere: Number(chip.dataset.sph) }; render(); return; }
+        if (e.target.closest("[data-sph-cancel]")) { selected = null; render(); return; }
+        const rel = e.target.closest("[data-rel]");
+        if (!rel) return;
+        const mode = rel.dataset.rel, n = rel.dataset.count, who = rel.dataset.slotName;
+        const what = mode === "all" ? `alle restlichen ${n} Checks` : mode === "sphere"
+            ? `${n} offene Checks aus Sphere ${Number(rel.dataset.sphere) + 1}` : `${n} offene Checks aus Sphere 1–${Number(rel.dataset.sphere) + 1}`;
+        if (!confirm(`${what} von ${who} freigeben?\n\nDie Items gehen sofort an ihre Empfänger (auch ${who} selbst). Geht nicht rückgängig.`)) return;
+        rel.disabled = true;
+        try {
+            const res = await fetch(`/tracker/${trackerId}/0/${rel.dataset.slot}/release`, {
+                method: "POST", headers: { "content-type": "application/json" },
+                body: JSON.stringify({ key, mode, sphere: rel.dataset.sphere !== undefined ? Number(rel.dataset.sphere) : null }),
+            });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok || !d.ok) throw new Error(d.error || `Fehler ${res.status}`);
+            rel.textContent = `⏳ ${d.count} werden übertragen`;
+            selected = null;
+        } catch (err) { rel.disabled = false; alert("Hat nicht geklappt: " + err.message); }
     });
 
     async function send(slot, body) {
