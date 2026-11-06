@@ -1,7 +1,13 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="de">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111111">
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='static/af/af-logo.svg') }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename="styles/tooltip.css") }}" />
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename="styles/cookieNotice.css") }}" />
     <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename="styles/globalStyles.css") }}" />
@@ -9,6 +15,8 @@
     {% block head %}
         <title>Archipelago</title>
     {% endblock %}
+    {# AF: nach allen Seiten-Styles laden, damit der AF-Look gewinnt #}
+    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename="styles/afTheme.css") }}" />
 </head>
 <body>
     <main>
@@ -26,8 +34,6 @@
         {% endblock %}
     </main>
 
-    {% if show_footer %}
-        {% include "islandFooter.html" %}
-    {% endif %}
+    {% include "af/siteFooter.html" %}
 </body>
 </html>

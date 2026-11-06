@@ -1,43 +1,46 @@
+{# AF: Kopfzeile im Look der öffentlichen Seite. IDs wie im Original, damit assets/baseHeader.js (Menüs) weiter greift. #}
 {% block head %}
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename="styles/themes/base.css") }}" />
     <script type="application/ecmascript" src="{{ url_for('static', filename="assets/baseHeader.js") }}"></script>
 {% endblock %}
 
 {% block header %}
     <header id="base-header">
         <div id="base-header-left">
-            <a href="/" id="site-title">
-                <img id="header-logo" src="/static/static/branding/header-logo.svg" alt="Archipelago" />
+            <a href="/" id="site-title" aria-label="Startseite">
+                <img class="af" src="{{ url_for('static', filename='static/af/af-logo.svg') }}" alt="Austrian Force" />
+                <span class="fuer">für</span>
+                <img class="unicef" src="{{ url_for('static', filename='static/af/unicef-white.png') }}" alt="UNICEF" />
+                <span class="site-name">Archipelago</span>
             </a>
         </div>
-        <div id="base-header-right">
-            <div id="base-header-popover-text">
-                <img id="base-header-popover-icon" src="/static/static/button-images/popover.png" alt="Popover Menu" />
-                get started
-            </div>
+        <nav id="base-header-right" aria-label="Navigation">
+            <a href="/games">Spiele</a>
+            <a href="/tutorial">Anleitungen</a>
+            <a href="/faq/en">FAQ</a>
+            <div id="base-header-popover-text" role="button" tabindex="0">Mehr ▾</div>
             <div id="base-header-popover-menu">
-                <a href="/games">supported games</a>
-                <a href="/tutorial">setup guides</a>
-                <a href="/generate">generate game</a>
-                <a href="/uploads">host game</a>
-                <a href="/user-content">user content</a>
+                <a href="/start-playing">Loslegen</a>
+                <a href="/generate">Spiel generieren</a>
+                <a href="/check">YAML prüfen</a>
+                <a href="/user-content">Meine Räume</a>
+                <a href="/stats">Statistik</a>
+                <a href="https://discord.gg/8Z65BR2" target="_blank" rel="noreferrer">Archipelago-Discord ↗</a>
             </div>
-            <a href="/faq/en">f.a.q</a>
-            <a href="https://discord.gg/8Z65BR2" target="_blank">discord</a>
-        </div>
+            <a href="/uploads" class="nav-cta">Spiel hosten</a>
+        </nav>
         <div id="base-header-right-mobile">
-            <a id="base-header-mobile-menu-button" href="#">
-                <img src="/static/static/button-images/hamburger-menu-icon.png" alt="Menu" />
-            </a>
+            <a id="base-header-mobile-menu-button" href="#" aria-label="Menü">☰</a>
         </div>
         <div id="base-header-mobile-menu">
-            <a href="/games">supported games</a>
-            <a href="/tutorial">setup guides</a>
-            <a href="/faq/en">f.a.q.</a>
-            <a href="/generate">generate game</a>
-            <a href="/uploads">host game</a>
-            <a href="/user-content">user content</a>
-            <a href="https://discord.gg/8Z65BR2" target="_blank">discord</a>
+            <a href="/games">Spiele</a>
+            <a href="/tutorial">Anleitungen</a>
+            <a href="/faq/en">FAQ</a>
+            <a href="/start-playing">Loslegen</a>
+            <a href="/generate">Spiel generieren</a>
+            <a href="/uploads">Spiel hosten</a>
+            <a href="/check">YAML prüfen</a>
+            <a href="/user-content">Meine Räume</a>
+            <a href="/stats">Statistik</a>
         </div>
     </header>
 {% endblock %}

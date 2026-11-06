@@ -1,0 +1,36 @@
+{# AF: Fuß wie auf der öffentlichen Seite (statt islandFooter) – auf jeder Seite #}
+<footer class="af-footer">
+    <span class="af-ribbon">Für jedes Kind</span>
+    <div class="af-wrap cols">
+        <div>
+            <a class="logos" href="/" aria-label="Startseite">
+                <img class="af" src="{{ url_for('static', filename='static/af/af-logo.svg') }}" alt="Austrian Force">
+                <span class="fuer">für</span>
+                <img class="unicef" src="{{ url_for('static', filename='static/af/unicef-white.png') }}" alt="UNICEF – für jedes Kind">
+            </a>
+            <p class="about">
+                Unser Archipelago-Server für den Charity-Stream der Austrian Force. Alle Spenden gehen an UNICEF, für jedes Kind.
+            </p>
+            <p class="credit">
+                Läuft mit <a href="https://archipelago.gg/" target="_blank" rel="noreferrer">Archipelago</a> –
+                <a href="https://github.com/ArchipelagoMW/Archipelago" target="_blank" rel="noreferrer">Quellcode</a> ·
+                <a href="https://github.com/ArchipelagoMW/Archipelago/graphs/contributors" target="_blank" rel="noreferrer">Mitwirkende</a> ·
+                <a href="/sitemap">Sitemap</a>
+            </p>
+        </div>
+        <nav aria-label="Links">
+            <h4 class="af-label">Archipelago</h4>
+            <ul>
+                <li><a href="/games">Unterstützte Spiele</a></li>
+                <li><a href="/tutorial">Anleitungen</a></li>
+                <li><a href="/uploads">Spiel hosten</a></li>
+                <li><a href="/user-content">Meine Räume</a></li>
+                <li><a href="/faq/en">FAQ</a></li>
+            </ul>
+        </nav>
+        <div class="cta">
+            <div class="af-big">Jetzt spenden und <span>Kindern in Not</span> helfen!</div>
+            <a class="af-btn" href="https://af-charity.xd0m3.at/" target="_blank" rel="noreferrer">Streamer wählen ↗</a>
+        </div>
+    </div>
+</footer>

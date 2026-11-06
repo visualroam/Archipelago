@@ -1,61 +1,71 @@
 {% extends 'pageWrapper.html' %}
-{% set show_footer = True %}
 
 {% block head %}
-    <title>Archipelago</title>
-    <link rel="stylesheet" type="text/css" href="{{ url_for('static', filename="styles/landing.css") }}" />
+    <title>Archipelago · Austrian Force für UNICEF</title>
 {% endblock %}
 
 {% block body %}
-    {% include 'header/oceanIslandHeader.html' %}
-    <div id="landing-wrapper">
-        <div id="landing-header">
-            <img id="landing-logo" src="static/static/branding/landing-logo.png" alt="Archipelago Logo" />
-            <h4>multiworld multi-game randomizer</h4>
-        </div>
-        <div id="landing-links">
-            <a href="/games" id="far-left-button">Supported<br />Games</a>
-            <a href="/tutorial" id="mid-left-button">Setup Guides</a>
-            <a href="/start-playing" id="mid-button">Start<br />Playing</a>
-            <a href="/faq/en/" id="mid-right-button">F.A.Q.</a>
-            <a href="https://discord.gg/8Z65BR2" id="far-right-button" target="_blank">Discord</a>
-        </div>
-        <div id="landing-clouds">
-            <img id="cloud1" src="/static/static/backgrounds/clouds/cloud-0001.png"/>
-            <img id="cloud2" src="/static/static/backgrounds/clouds/cloud-0002.png"/>
-            <img id="cloud3" src="/static/static/backgrounds/clouds/cloud-0003.png"/>
-        </div>
-        <div id="landing-decorations">
-            <img id="landing-deco-1" class="landing-deco deco-island" src="/static/static/decorations/island-b.png" />
-            <img id="landing-deco-2" class="landing-deco deco-island" src="/static/static/decorations/island-c.png" />
-            <img id="landing-deco-3" class="landing-deco deco-rock" src="/static/static/decorations/rock-in-water.png" />
-            <img id="landing-deco-4" class="landing-deco deco-rock" src="/static/static/decorations/rock-in-water.png" />
-            <img id="landing-deco-5" class="landing-deco deco-rock" src="/static/static/decorations/rock-in-water.png" />
-            <img id="landing-deco-6" class="landing-deco deco-rock" src="/static/static/decorations/rock-in-water.png" />
-        </div>
-        <div id="landing" class="grass-island">
-            <div id="landing-body">
-                <p id="first-line">Welcome to Archipelago!</p>
-                <p>
-                    This is a cross-game modification system which randomizes different games, then uses the result to
-                    build a single unified multi-player game. Items from one game may be present in another, and
-                    you will need your fellow players to find items you need in their games to help you complete
-                    your own.
-                </p>
-                <p>
-                    This project is the cumulative effort of many
-                    <a href="https://github.com/ArchipelagoMW/Archipelago/graphs/contributors">talented people.</a>
-                    Together, they have spent countless hours creating a huge repository of
-                    <a href="https://github.com/ArchipelagoMW/Archipelago">source code</a> which has turned
-                    our crazy idea into a reality.
-                </p>
-                <p>
-                    <a href="{{ url_for("stats") }}">{{ seeds }}</a>
-                    games were generated and
-                    <a href="{{ url_for("stats") }}">{{ rooms }}</a>
-                    were hosted in the last 7 days.
-                </p>
+    {% include 'header/baseHeader.html' %}
+    <div class="af-landing">
+        <section class="af-hero">
+            <span class="af-ribbon">Archipelago Multiworld</span>
+            <span class="af-tag">Charity-Stream</span>
+            <div class="logos">
+                <img class="af" src="{{ url_for('static', filename='static/af/af-logo.svg') }}" alt="Austrian Force">
+                <span class="fuer">für</span>
+                <img class="unicef" src="{{ url_for('static', filename='static/af/unicef-white.png') }}" alt="UNICEF">
             </div>
+            <div>
+                <h1>Viele Spiele. <span>Eine Welt.</span></h1>
+                <p>
+                    Archipelago mischt die Items aller Spiele zusammen: Was du brauchst, liegt vielleicht im Spiel eines
+                    anderen Streamers – und umgekehrt. Hier laufen die Räume für den Charity-Stream der Austrian Force.
+                </p>
+                <div class="actions">
+                    <a class="af-btn" href="/uploads">Spiel hosten →</a>
+                    <a class="af-btn ghost" href="/start-playing">So geht's</a>
+                </div>
+            </div>
+        </section>
+
+        <div class="af-section">
+            <h2>Loslegen</h2>
+            <p>Alles, was du für einen Slot brauchst.</p>
+        </div>
+        <div class="af-cards">
+            <a class="af-card" href="/games">
+                <span class="n">01</span>
+                <h3>Spiele</h3>
+                <p>Alle Spiele, die dieser Server kennt – mit Optionen-Seite zum Erstellen deiner YAML.</p>
+                <span class="go">Zu den Spielen <i>→</i></span>
+            </a>
+            <a class="af-card" href="/tutorial">
+                <span class="n">02</span>
+                <h3>Anleitungen</h3>
+                <p>Einrichtung pro Spiel: Client, Mod und wie du dich mit dem Raum verbindest.</p>
+                <span class="go">Zu den Anleitungen <i>→</i></span>
+            </a>
+            <a class="af-card" href="/generate">
+                <span class="n">03</span>
+                <h3>Generieren</h3>
+                <p>YAMLs hochladen und eine Multiworld erzeugen. Größere Seeds lieber lokal generieren.</p>
+                <span class="go">Spiel generieren <i>→</i></span>
+            </a>
+            <a class="af-card" href="/uploads">
+                <span class="n">04</span>
+                <h3>Hosten</h3>
+                <p>Fertigen Seed (.zip / .archipelago) hochladen und einen Raum mit Tracker starten.</p>
+                <span class="go">Spiel hosten <i>→</i></span>
+            </a>
+        </div>
+
+        <div class="af-section">
+            <h2>Letzte 7 Tage</h2>
+            <p>Was auf diesem Server los war.</p>
+        </div>
+        <div class="af-stats">
+            <a class="af-stat" href="{{ url_for("stats") }}"><div class="af-label">Generierte Spiele</div><div class="af-big">{{ seeds }}</div></a>
+            <a class="af-stat" href="{{ url_for("stats") }}"><div class="af-label">Gehostete Räume</div><div class="af-big">{{ rooms }}</div></a>
         </div>
     </div>
 {% endblock %}
