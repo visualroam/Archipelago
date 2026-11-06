@@ -311,3 +311,5 @@ details.more > summary::-webkit-details-marker { display: none; }
 details.more > summary::before { content: "▸ "; }
 details.more[open] > summary::before { content: "▾ "; }
 details.more .feed li:first-child { border-top: 2px solid var(--track); padding-top: 12px; }
+.admin-only { display: none; }
+body.is-admin .admin-only { display: inline; }

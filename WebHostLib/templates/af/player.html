@@ -86,12 +86,10 @@
         <div class="section"><h2 class="hl">Checks</h2>
             <p>{% if logic %}Blau ist jetzt spielbar, 🔒 braucht noch Items.{% else %}Alle Checks dieses Slots, nach Gebiet sortiert.{% endif %}</p></div>
         <div class="box checks-box" id="checks">
-            {% if checkable %}
-                <div class="check-only checkmode">
-                    <span><b>Abhak-Modus</b> – du kannst hier Checks abhaken. Das geht nicht rückgängig, also nur, was wirklich geschafft ist.</span>
-                    <button type="button" class="link" id="check-logout">Beenden</button>
-                </div>
-            {% endif %}
+            <div class="check-only checkmode">
+                <span><b>Abhak-Modus</b><span class="admin-only"> (Admin – gilt für jeden Slot)</span> – du kannst hier Checks abhaken. Das geht nicht rückgängig, also nur, was wirklich geschafft ist.</span>
+                <button type="button" class="link" id="check-logout">Beenden</button>
+            </div>
             <div class="toolbar">
                 <div class="seg" role="group" aria-label="Filter">
                     <button type="button" data-filter="open" class="active">Offen</button>
@@ -120,7 +118,7 @@
                                         {% if r.found.to_slot %}<a href="{{ url_for("get_player_tracker", tracker=room.tracker, tracked_team=team, tracked_player=r.found.to_slot) }}">{{ r.found.to }}</a>{% else %}{{ r.found.to }}{% endif %}</span>{% endif %}
                                     <span class="sub pending-note">wird übertragen … (bis zu 1 Minute)</span>
                                 </span>
-                                {% if checkable and r.state != "done" %}
+                                {% if r.state != "done" %}
                                     <button type="button" class="check-only chk {% if r.state == 'locked' %}chk-locked{% endif %}"
                                             data-id="{{ r.id }}" data-name="{{ r.name }}">Abhaken</button>
                                 {% endif %}
@@ -268,7 +266,10 @@
         store.set(CHECK_KEY, fromHash[1]);
         history.replaceState(null, "", location.pathname + location.search);  // Schlüssel nicht in der Adresszeile lassen
     }
-    let checkKey = store.get(CHECK_KEY, null);
+    // Admin-Schlüssel (vom Admin-Tracker gemerkt) gilt für jeden Slot dieses Raums, auch für echte Spiele
+    const ADMIN_KEY = "af-admin:" + location.pathname.split("/")[2];
+    const adminKey = (() => { try { return localStorage.getItem(ADMIN_KEY); } catch (e) { return null; } })();
+    let checkKey = store.get(CHECK_KEY, null) || adminKey;
 
     function markPending() {
         const pending = store.get(PENDING_KEY, {});
@@ -295,14 +296,17 @@
 
     if (checkKey) {
         fetch(`${endpoint}?key=${encodeURIComponent(checkKey)}`).then(r => r.json()).then(d => {
-            if (d.ok) document.body.classList.add("can-check");
-            else { store.set(CHECK_KEY, null); checkKey = null; }
+            if (d.ok) {
+                document.body.classList.add("can-check");
+                if (d.admin) document.body.classList.add("is-admin");
+            } else { store.set(CHECK_KEY, null); checkKey = null; }
         }).catch(() => {});
     }
 
     document.addEventListener("click", async e => {
         if (e.target.id === "check-logout") {
-            store.set(CHECK_KEY, null); checkKey = null; document.body.classList.remove("can-check");
+            store.set(CHECK_KEY, null); checkKey = null; document.body.classList.remove("can-check", "is-admin");
+            try { localStorage.removeItem(ADMIN_KEY); } catch (err) {}
             return;
         }
         const btn = e.target.closest(".chk, .goal-btn");

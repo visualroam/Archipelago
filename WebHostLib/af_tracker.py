@@ -507,6 +507,26 @@ def check_key(room_id: UUID, team: int, player: int) -> str:
     return hmac.new(secret, f"af-check:{room_id}:{team}:{player}".encode(), hashlib.sha256).hexdigest()[:24]
 
 
+def admin_key(room_id: UUID) -> str:
+    """Admin-Schlüssel pro Raum: darf jeden Slot abhaken (auch echte Spiele) und sieht den Admin-Tracker."""
+    secret = app.config["SECRET_KEY"]
+    secret = secret if isinstance(secret, bytes) else str(secret).encode()
+    return hmac.new(secret, f"af-admin:{room_id}".encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def is_admin(room, key: str) -> bool:
+    return bool(key) and hmac.compare_digest(key, admin_key(room.id))
+
+
+def admin_link(room) -> Optional[str]:
+    if not room.tracker:
+        return None
+    return url_for("af_admin_tracker", tracker=room.tracker, _external=True) + f"#admin={admin_key(room.id)}"
+
+
+app.jinja_env.globals["af_admin_link"] = admin_link
+
+
 def check_links(room) -> List[Dict[str, Any]]:
     """Abhak-Links pro Slot – nur für den Raum-Besitzer auf der (nicht gecachten) Raum-Seite."""
     if not room.tracker:
@@ -537,9 +557,10 @@ def af_check_off(tracker: UUID, team: int, player: int):
     game = tracker_data.get_player_game(player)
     data = (request.get_json(silent=True) or {}) if request.method == "POST" else {}
     key = request.args.get("key", "") if request.method == "GET" else str(data.get("key", ""))
-    valid = can_check_off(game) and hmac.compare_digest(key, check_key(room.id, team, player))
+    admin = is_admin(room, key)  # Admin darf jeden Slot, auch echte Spiele mit Client
+    valid = admin or (can_check_off(game) and hmac.compare_digest(key, check_key(room.id, team, player)))
     if request.method == "GET":
-        return jsonify(ok=valid)
+        return jsonify(ok=valid, admin=admin)
     if not valid:
         return jsonify(ok=False, error="Link ungültig"), 403
 
@@ -548,7 +569,7 @@ def af_check_off(tracker: UUID, team: int, player: int):
         if tracker_data.get_player_client_status(team, player) == ClientStatus.CLIENT_GOAL:
             return jsonify(ok=True, already=True)
         logic = build_logic(game, tracker_data.get_slot_data(player), inventory_by_name(tracker_data, team, player))
-        if not logic or not logic["goal"] or not logic["goal"]["ok"]:
+        if not admin and (not logic or not logic["goal"] or not logic["goal"]["ok"]):
             return jsonify(ok=False, error="Das Ziel ist laut Logik noch nicht erreichbar."), 409
         command = f"/goal {shlex.quote(name)}"
     else:
@@ -569,6 +590,126 @@ def af_check_off(tracker: UUID, team: int, player: int):
         room.last_activity = now
     commit()
     return jsonify(ok=True)
+
+
+# ─── Admin-Tracker: alle Slots, Abhaken überall, „wo hängt's“ ──────────────────
+
+@app.route("/tracker/<suuid:tracker>/admin")
+def af_admin_tracker(tracker: UUID):
+    """Nur die Hülle – Daten (mit Spoilern) holt die Seite per POST mit dem Admin-Schlüssel."""
+    room = Room.get(tracker=tracker)
+    if room is None:
+        abort(404)
+    return render_template("af/admin.html", room=room)
+
+
+@app.route("/tracker/<suuid:tracker>/admin/data", methods=["POST"])
+def af_admin_data(tracker: UUID):
+    from .tracker import TrackerData
+
+    room = Room.get(tracker=tracker)
+    if room is None:
+        abort(404)
+    data = request.get_json(silent=True) or {}
+    if not is_admin(room, str(data.get("key", ""))):
+        return jsonify(ok=False, error="Admin-Link ungültig"), 403
+    return jsonify(ok=True, **admin_overview(TrackerData(room)))
+
+
+def admin_overview(tracker_data, team: int = 0) -> Dict[str, Any]:
+    """Alle Slots + Engpässe. Spoiler-lastig, daher nur über den Admin-Schlüssel."""
+    names = tracker_data.get_room_long_player_names()
+    games = tracker_data.get_room_games()
+    item_names = tracker_data.item_id_to_name
+    location_names = tracker_data.location_id_to_name
+    activity = tracker_data.get_room_last_activity()
+    players = [p for t, p in visible_players(tracker_data)]
+    all_players = tracker_data.get_all_players()[team]
+
+    sphere_of: Dict[Tuple[int, int], int] = {}
+    for index, sphere in enumerate(tracker_data.get_spheres()):
+        for slot, locations in sphere.items():
+            for location in locations:
+                sphere_of[slot, location] = index
+
+    checked = {p: tracker_data.get_player_checked_locations(team, p) for p in all_players}
+    waiting = collections.defaultdict(collections.Counter)   # Empfänger → {Halter: Anzahl}
+    holding = collections.defaultdict(collections.Counter)   # Halter → {Empfänger: Anzahl}
+    open_prog = []                                           # alle offenen Fortschritts-Checks
+    spheres = collections.defaultdict(lambda: [0, 0])        # Sphere → [erledigt, gesamt]
+    for p in all_players:
+        game = games[(team, p)]
+        for location, (item, receiver, flags) in tracker_data.get_player_locations(p).items():
+            sphere = sphere_of.get((p, location))
+            done = location in checked[p]
+            if sphere is not None:
+                spheres[sphere][1] += 1
+                spheres[sphere][0] += done
+            if done or not flags & FLAG_PROGRESSION:
+                continue
+            holding[p][receiver] += 1
+            waiting[receiver][p] += 1
+            open_prog.append({
+                "sphere": sphere if sphere is not None else 999,
+                "slot": p, "slot_name": names[(team, p)],
+                "location_id": location, "location": location_names[game][location],
+                "item": item_names[games[(team, receiver)]][item],
+                "receiver": receiver, "receiver_name": names[(team, receiver)] if receiver != p else "selbst",
+            })
+    open_prog.sort(key=lambda e: (e["sphere"], natural_key(e["slot_name"]), natural_key(e["location"])))
+    frontier = open_prog[0]["sphere"] if open_prog else None
+
+    slots = []
+    for p in players:
+        game = games[(team, p)]
+        total = len(tracker_data.get_player_locations(p))
+        done = len(checked[p])
+        delta = activity.get((team, p))
+        status_text, status_class = status_of(tracker_data, team, p)
+        entry = {
+            "player": p, "name": names[(team, p)], "game": display_game(game), "cover": cover_url(game),
+            "status": status_text, "status_class": status_class,
+            "idle": int(delta.total_seconds()) if delta is not None else None, "last_activity": ago(delta),
+            "done": done, "total": total, "pct": round(100 * done / total) if total else 100,
+            "url": url_for("get_player_tracker", tracker=tracker_data.room.tracker, tracked_team=team, tracked_player=p),
+            "checkable": can_check_off(game),
+            "waiting": sum(c for h, c in waiting[p].items() if h != p),
+            "waiting_on": [{"slot": h, "name": names[(team, h)], "count": c}
+                           for h, c in waiting[p].most_common() if h != p][:5],
+            "own_open": waiting[p][p],
+            "holding": sum(c for r, c in holding[p].items() if r != p),
+            "holding_for": [{"slot": r, "name": names[(team, r)], "count": c}
+                            for r, c in holding[p].most_common() if r != p][:5],
+            "next": next((e for e in open_prog if e["slot"] == p), None),
+            "logic": None,
+        }
+        inventory = inventory_by_name(tracker_data, team, p)
+        logic = build_logic(game, tracker_data.get_slot_data(p), inventory)
+        if logic:
+            open_ids = set(tracker_data.get_player_locations(p)) - checked[p]
+            playable = sum(1 for loc in open_ids
+                           if evaluate(logic["rules"].get(location_names[game][loc]), inventory)[0])
+            entry["logic"] = {"playable": playable, "locked": len(open_ids) - playable,
+                              "goal_ok": bool(logic["goal"] and logic["goal"]["ok"])}
+        slots.append(entry)
+
+    edges = [{"from": h, "to": r, "count": c} for h in players for r, c in holding[h].items()
+             if r != h and r in players and c > 0]
+    # „Jetzt“: nur wichtige Items aus den frühesten offenen Spheres – das, was gerade wirklich blockiert
+    now = collections.Counter((e["slot"], e["receiver"]) for e in open_prog
+                              if frontier is not None and e["sphere"] <= frontier + 2 and e["slot"] != e["receiver"])
+    edges_now = [{"from": h, "to": r, "count": c} for (h, r), c in now.items() if h in players and r in players]
+    return {
+        "room": {"done": sum(len(checked[p]) for p in players),
+                 "total": sum(len(tracker_data.get_player_locations(p)) for p in players),
+                 "goals": sum(1 for s in slots if s["status_class"] == "goal"),
+                 "frontier": frontier, "spheres_total": len(spheres)},
+        "slots": slots,
+        "edges": edges,
+        "edges_now": edges_now,
+        "spheres": [{"index": i, "done": d, "total": t} for i, (d, t) in sorted(spheres.items())],
+        "bottleneck": [e for e in open_prog if frontier is not None and e["sphere"] <= frontier + 1][:60],
+    }
 
 
 # ─── Slot-Tracker ────────────────────────────────────────────────────────────

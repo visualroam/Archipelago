@@ -364,3 +364,7 @@ a.af-card:hover .go i { transform: translateX(4px); }
 #af-check-links { margin-top: 28px; padding-top: 22px; border-top: 2px solid var(--track); }
 #af-check-links p { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 6px 0 14px; }
 #af-check-links button { padding: 7px 12px !important; font-size: 13px !important; }
+#af-admin-link { margin-top: 28px; padding-top: 22px; border-top: 2px solid var(--track); }
+#af-admin-link p { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 6px 0 14px; }
+#af-admin-link a.button { margin-right: 12px !important; }
+#af-admin-link button { padding: 7px 12px !important; font-size: 13px !important; }

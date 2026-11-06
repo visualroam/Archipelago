@@ -1,0 +1,287 @@
+{% extends "af/base.html" %}
+{% block title %}Admin-Tracker{% endblock %}
+
+{% block body %}
+<style>
+.adm-hero { margin-top: 40px; padding: 34px 26px 24px; }
+.adm-hero h1 { font-size: clamp(44px, 7vw, 72px); margin-bottom: 14px; }
+.adm-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; margin-top: 18px; }
+.adm-stat { background: #1a1a1a; border-radius: 10px; padding: 12px 14px; }
+.adm-stat .big { font-size: 40px; }
+.adm-stat .hint { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.adm-error { margin-top: 40px; }
+.graph-box { padding: 10px; }
+.graph-box svg { width: 100%; height: auto; display: block; }
+.graph-box .edge { stroke: var(--cyan); fill: none; opacity: .55; transition: opacity .15s; }
+.graph-box .edge.dim { opacity: .06; }
+.graph-box .edge.hot { stroke: var(--yellow); opacity: .95; }
+.graph-box .edge.minor { opacity: 0; }
+.graph-box .edge.minor.hot { opacity: .95; }
+.graph-box .node circle { stroke: var(--white); stroke-width: 3; cursor: pointer; }
+.graph-box .node text { fill: var(--white); font: 600 13px Poppins, sans-serif; paint-order: stroke; stroke: var(--ink); stroke-width: 4px; }
+.graph-box .node .count { font: 400 18px "Bebas Neue", sans-serif; fill: var(--ink); stroke: none; }
+.graph-box .node.dim { opacity: .3; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 12px; color: var(--muted); padding: 8px 12px 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+.spheres { display: flex; align-items: flex-end; gap: 4px; height: 180px; padding: 18px 16px 6px; }
+.spheres .col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; height: 100%; justify-content: flex-end; min-width: 0; }
+.spheres .bar { width: 100%; background: var(--track); border-radius: 4px 4px 0 0; position: relative; overflow: hidden; min-height: 4px; }
+.spheres .bar > div { position: absolute; bottom: 0; left: 0; right: 0; background: var(--yellow); }
+.spheres .col.front .bar { outline: 2px solid var(--cyan); outline-offset: 1px; }
+.spheres .lbl { font-size: 10px; color: var(--dim); }
+.spheres .col.front .lbl { color: var(--cyan); font-weight: 700; }
+.sphere-note { padding: 0 16px 14px; font-size: 13px; color: var(--muted); }
+table.hang { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.hang th { text-align: left; font-size: 11px; letter-spacing: 1.2px; text-transform: uppercase; color: var(--muted); padding: 10px 10px; border-bottom: 2px solid var(--track); }
+table.hang td { padding: 9px 10px; border-bottom: 1px solid #1f1f1f; vertical-align: top; }
+table.hang td.s { font-family: var(--display); font-size: 20px; color: var(--cyan); }
+table.hang a { color: var(--white); font-weight: 600; }
+table.hang a:hover { color: var(--yellow); }
+.hang-wrap { overflow-x: auto; padding: 4px 6px 10px; }
+.cards { display: grid; gap: 30px 24px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+.scard2 { padding: 22px 18px 16px; display: grid; gap: 10px; }
+.scard2 .top { display: flex; align-items: center; gap: 12px; }
+.scard2 img.c { width: 46px; height: 61px; border-radius: 5px; object-fit: cover; flex: none; }
+.scard2 .c.none { width: 46px; height: 61px; border-radius: 5px; border: 2px dashed var(--track); flex: none; }
+.scard2 .nm { font-size: 28px; }
+.scard2 .gm { font-size: 12px; color: var(--muted); }
+.scard2 .row { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; }
+.scard2 .row .big { font-size: 26px; color: var(--yellow); }
+.flags { display: flex; flex-wrap: wrap; gap: 6px; }
+.flag { font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 4px; background: var(--track); color: var(--white); }
+.flag.warn { background: var(--red); }
+.flag.good { background: var(--green); color: var(--ink); }
+.flag.info { background: var(--cyan); color: var(--ink); }
+.who { font-size: 12px; color: var(--muted); line-height: 1.55; }
+.who b { color: var(--white); }
+.nextchk { font-size: 12px; color: var(--muted); border-top: 2px solid var(--track); padding-top: 10px; }
+.nextchk b { color: var(--white); }
+.acts { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 4px; }
+.acts a, .acts button, table.hang button {
+  border: 0; border-radius: 4px; padding: 7px 11px; cursor: pointer; font: 700 12px Poppins, sans-serif; text-decoration: none;
+  background: var(--yellow); color: var(--ink); box-shadow: 3px 3px 0 var(--red);
+}
+.acts .ghost { background: var(--ink); color: var(--white); box-shadow: 3px 3px 0 var(--white); border: 2px solid var(--white); }
+table.hang button:disabled, .acts button:disabled { opacity: .4; }
+.updated { font-size: 12px; color: var(--dim); margin-top: 10px; }
+</style>
+
+<div class="topnav">
+    <a class="back" href="{{ url_for("get_multiworld_tracker", tracker=room.tracker) }}">← Öffentliche Übersicht</a>
+</div>
+
+<div id="adm-error" class="empty adm-error hidden"></div>
+<div id="adm"></div>
+{% endblock %}
+
+{% block script %}
+<script>
+(() => {
+    const trackerId = location.pathname.split("/")[2];
+    const KEY = "af-admin:" + trackerId;
+    const store = {
+        get: k => { try { return localStorage.getItem(k); } catch (e) { return null; } },
+        set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
+    };
+    const m = location.hash.match(/admin=([0-9a-f]+)/);
+    if (m) { store.set(KEY, m[1]); history.replaceState(null, "", location.pathname); }
+    const key = store.get(KEY);
+    let data = null;
+    const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const fmt = n => n.toLocaleString("de-AT");
+    const slotUrl = p => `/tracker/${trackerId}/0/${p}`;
+
+    function showError(text) {
+        const el = document.getElementById("adm-error");
+        el.textContent = text; el.classList.remove("hidden");
+    }
+
+    async function load() {
+        if (!key) { showError("Kein Admin-Schlüssel. Den Admin-Link findest du als Raum-Besitzer auf der Raum-Seite."); return; }
+        try {
+            const res = await fetch(location.pathname + "/data", {
+                method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key }),
+            });
+            const d = await res.json();
+            if (!d.ok) { showError(d.error || "Fehler"); if (res.status === 403) store.set(KEY, null); return; }
+            data = d; data.loadedAt = new Date(); render();
+        } catch (e) { /* nächster Versuch */ }
+    }
+
+    let graphMode = "now";
+    function graph(d) {
+        const edgeList = graphMode === "now" ? d.edges_now : d.edges;
+        const slots = d.slots.slice().sort((a, b) => a.name.localeCompare(b.name, "de"));
+        const n = slots.length, W = 900, H = 640, cx = W / 2, cy = H / 2 + 6, R = Math.min(W, H) / 2 - 80;
+        const pos = {};
+        slots.forEach((s, i) => {
+            const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+            pos[s.player] = { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a), a };
+        });
+        const maxC = Math.max(1, ...edgeList.map(e => e.count));
+        // Nur die stärksten Pfeile immer zeigen, der Rest erscheint beim Hovern über einen Streamer
+        const TOP = 24;
+        const cut = edgeList.length > TOP ? edgeList.map(e => e.count).sort((a, b) => b - a)[TOP - 1] : 0;
+        const nodeR = s => 16 + Math.min(18, Math.sqrt(held(s)) * 3);
+        const holdNow = {};
+        edgeList.forEach(e => { holdNow[e.from] = (holdNow[e.from] || 0) + e.count; });
+        const held = s => graphMode === "now" ? (holdNow[s.player] || 0) : s.holding;
+        const edges = edgeList.map(e => {
+            const a = pos[e.from], b = pos[e.to];
+            if (!a || !b) return "";
+            const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+            const qx = mx + (cx - mx) * 0.35, qy = my + (cy - my) * 0.35;  // leicht zur Mitte gebogen
+            const w = 1.5 + 7 * Math.sqrt(e.count / maxC);
+            return `<path class="edge${e.count < cut ? " minor" : ""}" data-from="${e.from}" data-to="${e.to}" d="M${a.x},${a.y} Q${qx},${qy} ${b.x},${b.y}"
+                     stroke-width="${w.toFixed(1)}" marker-end="url(#arr)"><title>${esc(d.slots.find(s => s.player === e.from)?.name)} hält ${e.count} wichtige Items für ${esc(d.slots.find(s => s.player === e.to)?.name)}</title></path>`;
+        }).join("");
+        const color = s => s.status_class === "goal" ? "var(--yellow)" : s.status_class === "on" ? "var(--green)" : "#555";
+        const nodes = slots.map(s => {
+            const p = pos[s.player], r = nodeR(s);
+            const lx = p.x + Math.cos(p.a) * (r + 10), ly = p.y + Math.sin(p.a) * (r + 10) + 4;
+            const anchor = Math.abs(Math.cos(p.a)) < 0.3 ? "middle" : (Math.cos(p.a) > 0 ? "start" : "end");
+            return `<g class="node" data-p="${s.player}">
+                <circle cx="${p.x}" cy="${p.y}" r="${r}" fill="${color(s)}"><title>${esc(s.name)} · hält ${s.holding} für andere · wartet auf ${s.waiting}</title></circle>
+                <text class="count" x="${p.x}" y="${p.y + 6}" text-anchor="middle">${held(s) || ""}</text>
+                <text x="${lx}" y="${ly}" text-anchor="${anchor}">${esc(s.name)}</text></g>`;
+        }).join("");
+        return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Wer wartet auf wen">
+            <defs><marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+                <path d="M0,0 L10,5 L0,10 z" fill="var(--cyan)"/></marker></defs>${edges}${nodes}</svg>`;
+    }
+
+    function render() {
+        if (!data) return;
+        const d = data, r = d.room;
+        const pct = r.total ? Math.round(100 * r.done / r.total) : 100;
+        const topHolders = d.slots.filter(s => s.holding).sort((a, b) => b.holding - a.holding).slice(0, 3);
+        const maxSphere = Math.max(1, ...d.spheres.map(s => s.total));
+        const sphereCols = d.spheres.map(s => `
+            <div class="col ${s.index === r.frontier ? "front" : ""}" title="Sphere ${s.index + 1}: ${s.done}/${s.total}">
+                <div class="bar" style="height:${Math.max(4, 100 * s.total / maxSphere)}%"><div style="height:${s.total ? 100 * s.done / s.total : 0}%"></div></div>
+                <span class="lbl">${s.index + 1}</span></div>`).join("");
+        const hang = d.bottleneck.map(e => `
+            <tr><td class="s">${e.sphere + 1}</td>
+                <td><a href="${slotUrl(e.slot)}">${esc(e.slot_name)}</a></td>
+                <td>${esc(e.location)}</td>
+                <td><b class="kind-prog">${esc(e.item)}</b> → ${e.receiver === e.slot ? "selbst" : `<a href="${slotUrl(e.receiver)}">${esc(e.receiver_name)}</a>`}</td>
+                <td><button type="button" data-check="${e.slot}:${e.location_id}" data-name="${esc(e.location)}" data-slot-name="${esc(e.slot_name)}">Abhaken</button></td></tr>`).join("");
+        const cards = d.slots.slice().sort((a, b) => b.holding - a.holding || a.name.localeCompare(b.name, "de")).map(s => {
+            const flags = [];
+            if (s.status_class === "goal") flags.push(`<span class="flag good">Ziel erreicht</span>`);
+            else if (s.logic && s.logic.goal_ok) flags.push(`<span class="flag info">Ziel bereit – melden?</span>`);
+            if (s.logic && s.logic.playable === 0 && s.status_class !== "goal") flags.push(`<span class="flag warn">nichts spielbar</span>`);
+            if (s.idle !== null && s.idle > 1800 && s.status_class !== "goal") flags.push(`<span class="flag warn">inaktiv ${esc(s.last_activity)}</span>`);
+            if (s.idle === null) flags.push(`<span class="flag">nie verbunden</span>`);
+            if (s.holding >= 10) flags.push(`<span class="flag warn">blockiert ${s.holding} Items</span>`);
+            const waitOn = s.waiting_on.map(w => `<b>${esc(w.name)}</b> ${w.count}`).join(" · ");
+            const holdFor = s.holding_for.map(w => `<b>${esc(w.name)}</b> ${w.count}`).join(" · ");
+            return `<div class="box scard2">
+                <div class="top">${s.cover ? `<img class="c" src="${s.cover}" alt="">` : `<div class="c none"></div>`}
+                    <div style="min-width:0"><div class="big nm">${esc(s.name)}</div><div class="gm">${esc(s.game)} · ${esc(s.status)}${s.last_activity ? " · " + esc(s.last_activity) : ""}</div></div></div>
+                <div class="row"><span><span class="big">${fmt(s.done)}</span> / ${fmt(s.total)}</span><span>${s.pct}%</span></div>
+                <div class="progress thin"><div style="width:${s.pct}%"></div></div>
+                ${s.logic ? `<div class="who">Logik: <b>${s.logic.playable}</b> spielbar · ${s.logic.locked} gesperrt</div>` : ""}
+                ${flags.length ? `<div class="flags">${flags.join("")}</div>` : ""}
+                <div class="who">Wartet auf ${s.waiting} wichtige Items${waitOn ? ": " + waitOn : ""}<br>
+                    Hält ${s.holding} wichtige Items für andere${holdFor ? ": " + holdFor : ""}</div>
+                ${s.next ? `<div class="nextchk">Nächster wichtiger Check (Sphere ${s.next.sphere + 1}): <b>${esc(s.next.location)}</b><br>→ ${esc(s.next.item)} für ${esc(s.next.receiver_name)}</div>` : ""}
+                <div class="acts"><a href="${slotUrl(s.player)}">Tracker · Abhaken</a>
+                    ${s.status_class !== "goal" ? `<button type="button" class="ghost" data-goal="${s.player}" data-slot-name="${esc(s.name)}">Ziel melden</button>` : ""}</div>
+            </div>`;
+        }).join("");
+
+        document.getElementById("adm").innerHTML = `
+            <section class="box adm-hero">
+                <span class="ribbon">Admin-Tracker · nur mit Admin-Link</span>
+                <h1 class="big">Wo hängt's?</h1>
+                <div class="progress"><div style="width:${pct}%"></div></div>
+                <div class="adm-stats">
+                    <div class="adm-stat"><div class="big yellow">${pct}%</div><div class="label">${fmt(r.done)} / ${fmt(r.total)} Checks</div></div>
+                    <div class="adm-stat"><div class="big">${r.goals} / ${d.slots.length}</div><div class="label">Ziel erreicht</div></div>
+                    <div class="adm-stat"><div class="big" style="color:var(--cyan)">${r.frontier === null ? "–" : r.frontier + 1} / ${r.spheres_total}</div><div class="label">Spielverlauf (Sphere)</div>
+                        <div class="hint">frühester Abschnitt mit offenen wichtigen Checks</div></div>
+                    <div class="adm-stat"><div class="big" style="font-size:24px;line-height:1.2">${topHolders.map(s => esc(s.name)).join("<br>") || "–"}</div><div class="label">halten am meisten fest</div></div>
+                </div>
+                <div class="updated">Stand ${data.loadedAt.toLocaleTimeString("de-AT")} · aktualisiert sich alle 30 s</div>
+            </section>
+
+            <div class="section"><h2 class="hl">Wer wartet auf wen</h2>
+                <p>Pfeil von A nach B: A hat noch wichtige Items für B in offenen Checks. Dicke = Anzahl, Zahl im Kreis = wie viel jemand für andere hält. Gezeigt werden die 24 stärksten Pfeile; Maus über einen Streamer zeigt alle seine Pfeile, Klick öffnet seinen Tracker.</p></div>
+            <div class="box graph-box">
+                <div class="seg graph-mode" style="padding:8px 8px 0">
+                    <button type="button" data-mode="now" class="${graphMode === "now" ? "active" : ""}">Jetzt relevant (${d.edges_now.length})</button>
+                    <button type="button" data-mode="all" class="${graphMode === "all" ? "active" : ""}">Alle offenen (${d.edges.length})</button>
+                </div>
+                ${graph(d)}
+                <div class="legend"><span><i style="background:var(--green)"></i>verbunden</span><span><i style="background:#555"></i>offline</span><span><i style="background:var(--yellow)"></i>Ziel erreicht</span><span><i style="background:var(--cyan);border-radius:0;height:3px;vertical-align:3px"></i>wartet auf (Pfeil = hält für)</span></div></div>
+
+            <div class="section"><h2 class="hl">Spielverlauf</h2>
+                <p>Alle Checks nach Sphere (Reihenfolge, in der die Multiworld lösbar ist). Gelb = erledigt. Blau umrandet = hier hängt es gerade.</p></div>
+            <div class="box" style="padding:0">${sphereCols ? `<div class="spheres">${sphereCols}</div>` : `<div class="empty">Keine Sphere-Daten im Seed.</div>`}
+                <div class="sphere-note">Solange frühe Spheres offen sind, kommen spätere Items nicht frei – dort lohnt sich Druck am meisten.</div></div>
+
+            <div class="section"><h2 class="hl">Wo es hängt</h2>
+                <p>Offene Checks mit wichtigen Items aus den frühesten offenen Spheres. Wer die macht, schaltet andere frei.</p></div>
+            <div class="box" style="padding:0">${hang ? `<div class="hang-wrap"><table class="hang"><thead><tr><th>Sphere</th><th>Bei</th><th>Check</th><th>Item → für</th><th></th></tr></thead><tbody>${hang}</tbody></table></div>` : `<div class="empty" style="margin:18px">Nichts offen – alles Wichtige ist gefunden. 🎉</div>`}</div>
+
+            <div class="section"><h2 class="hl">Streamer</h2><p>Sortiert nach: wer hält am meisten für andere fest.</p></div>
+            <div class="cards">${cards}</div>`;
+
+        // Graph: Hover zeigt nur die Pfeile eines Streamers
+        document.querySelectorAll(".graph-box .node").forEach(nd => {
+            nd.addEventListener("mouseenter", () => {
+                const p = nd.dataset.p;
+                document.querySelectorAll(".graph-box .edge").forEach(e => {
+                    const on = e.dataset.from === p || e.dataset.to === p;
+                    e.classList.toggle("dim", !on); e.classList.toggle("hot", on);
+                });
+                document.querySelectorAll(".graph-box .node").forEach(o => o.classList.toggle("dim", o !== nd));
+            });
+            nd.addEventListener("mouseleave", () => {
+                document.querySelectorAll(".graph-box .edge, .graph-box .node").forEach(e => e.classList.remove("dim", "hot"));
+            });
+            nd.addEventListener("click", () => { location.href = slotUrl(nd.dataset.p); });
+        });
+    }
+
+    document.addEventListener("click", e => {
+        const b = e.target.closest(".graph-mode button");
+        if (!b) return;
+        graphMode = b.dataset.mode; render();
+    });
+
+    async function send(slot, body) {
+        const res = await fetch(`/tracker/${trackerId}/0/${slot}/check`, {
+            method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, ...body }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok || !d.ok) throw new Error(d.error || `Fehler ${res.status}`);
+    }
+
+    document.addEventListener("click", async e => {
+        const chk = e.target.closest("[data-check]");
+        const goal = e.target.closest("[data-goal]");
+        if (!chk && !goal) return;
+        const btn = chk || goal;
+        const question = chk
+            ? `„${btn.dataset.name}“ bei ${btn.dataset.slotName} abhaken?\n\nDas geht nicht rückgängig.`
+            : `Ziel für ${btn.dataset.slotName} als erreicht melden?\n\nDer Slot gilt dann als fertig, seine restlichen Items werden verteilt. Geht nicht rückgängig.`;
+        if (!confirm(question)) return;
+        btn.disabled = true;
+        try {
+            if (chk) { const [slot, loc] = btn.dataset.check.split(":"); await send(slot, { location: Number(loc) }); btn.textContent = "⏳ übertragen"; }
+            else { await send(btn.dataset.goal, { goal: true }); btn.textContent = "Gemeldet ✓"; }
+        } catch (err) { btn.disabled = false; alert("Hat nicht geklappt: " + err.message); }
+    });
+
+    window.afRestoreState = render;   // base.html lädt die Hülle neu → aus den letzten Daten zeichnen
+    load();
+    setInterval(load, 30000);
+})();
+</script>
+{% endblock %}
+
+{% block footlinks %}
+    <li><a href="{{ url_for("get_multiworld_tracker", tracker=room.tracker) }}">Öffentliche Übersicht</a></li>
+{% endblock %}

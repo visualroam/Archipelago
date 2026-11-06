@@ -44,7 +44,24 @@
             {% endif %}
         </span>
         {{ macros.list_patches_room(room) }}
+        <script>
+            document.addEventListener("click", async e => {
+                const b = e.target.closest(".af-copy");
+                if (!b) return;
+                try { await navigator.clipboard.writeText(b.dataset.url); b.textContent = "Kopiert ✓"; }
+                catch (err) { prompt("Link kopieren:", b.dataset.url); }
+            });
+        </script>
         {# AF: geheime Abhak-Links für Welten ohne Client – nur der Raum-Besitzer sieht sie #}
+        {% if room.owner == session["_id"] and room.tracker %}
+            <div id="af-admin-link">
+                <h3>Admin-Tracker</h3>
+                <p>Alle Streamer auf einen Blick, „wo hängt's“, wer auf wen wartet – und Abhaken für <b>jeden</b> Slot (auch echte
+                    Spiele, z. B. wenn ein Client abstürzt) plus „Ziel melden“. Nur für die Orga, nie an Streamer geben.</p>
+                <a class="button" href="{{ af_admin_link(room) }}" target="_blank" rel="noreferrer">Admin-Tracker öffnen</a>
+                <button type="button" class="af-copy" data-url="{{ af_admin_link(room) }}">Link kopieren</button>
+            </div>
+        {% endif %}
         {% if room.owner == session["_id"] %}
             {% set af_links = af_check_links(room) %}
             {% if af_links %}
@@ -65,12 +82,6 @@
                         </tbody>
                     </table>
                 </div>
-                <script>
-                    document.querySelectorAll(".af-copy").forEach(b => b.addEventListener("click", async () => {
-                        try { await navigator.clipboard.writeText(b.dataset.url); b.textContent = "Kopiert ✓"; }
-                        catch (e) { prompt("Link kopieren:", b.dataset.url); }
-                    }));
-                </script>
             {% endif %}
         {% endif %}
         {% if room.owner == session["_id"] %}
