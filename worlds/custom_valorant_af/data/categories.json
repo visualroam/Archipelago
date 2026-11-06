@@ -1,0 +1,57 @@
+{
+    "$schema": "https://github.com/ManualForArchipelago/Manual/raw/main/schemas/Manual.categories.schema.json",
+    "Duelisten": {
+        "sort-key": "1"
+    },
+    "Initiatoren": {
+        "sort-key": "2"
+    },
+    "Controller": {
+        "sort-key": "3"
+    },
+    "Sentinels": {
+        "sort-key": "4"
+    },
+    "Wins": {
+        "hidden": true
+    },
+    "Aces": {
+        "hidden": true
+    },
+    "25 Kill Bombs": {
+        "hidden": true
+    },
+    "Agenten": {
+        "hidden": true
+    },
+    "Primärwaffen": {
+        "hidden": true
+    },
+    "Ziel": {
+        "sort-key": "9"
+    },
+    "Extras": {
+        "sort-key": "6"
+    },
+    "Ingame Traps": {
+        "sort-key": "7"
+    },
+    "Sidearms": {
+        "sort-key": "5-Sidearms"
+    },
+    "SMGs": {
+        "sort-key": "5-SMGs"
+    },
+    "Shotguns": {
+        "sort-key": "5-Shotguns"
+    },
+    "Rifles": {
+        "sort-key": "5-Rifles"
+    },
+    "Sniper": {
+        "sort-key": "5-Sniper"
+    },
+    "Heavies": {
+        "sort-key": "5-Heavies"
+    }
+}

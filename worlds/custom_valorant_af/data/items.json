@@ -1,0 +1,527 @@
+{
+    "$schema": "https://github.com/ManualForArchipelago/Manual/raw/main/schemas/Manual.items.schema.json",
+    "data": [
+        {
+            "name": "Jett",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-00"
+        },
+        {
+            "name": "Phoenix",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-01"
+        },
+        {
+            "name": "Raze",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-02"
+        },
+        {
+            "name": "Reyna",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-03"
+        },
+        {
+            "name": "Yoru",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-04"
+        },
+        {
+            "name": "Neon",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-05"
+        },
+        {
+            "name": "Iso",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-06"
+        },
+        {
+            "name": "Waylay",
+            "category": [
+                "Agenten",
+                "Duelisten"
+            ],
+            "progression": true,
+            "sort-key": "Duelisten-07"
+        },
+        {
+            "name": "Sova",
+            "category": [
+                "Agenten",
+                "Initiatoren"
+            ],
+            "progression": true,
+            "sort-key": "Initiatoren-00"
+        },
+        {
+            "name": "Breach",
+            "category": [
+                "Agenten",
+                "Initiatoren"
+            ],
+            "progression": true,
+            "sort-key": "Initiatoren-01"
+        },
+        {
+            "name": "Skye",
+            "category": [
+                "Agenten",
+                "Initiatoren"
+            ],
+            "progression": true,
+            "sort-key": "Initiatoren-02"
+        },
+        {
+            "name": "KAY/O",
+            "category": [
+                "Agenten",
+                "Initiatoren"
+            ],
+            "progression": true,
+            "sort-key": "Initiatoren-03"
+        },
+        {
+            "name": "Fade",
+            "category": [
+                "Agenten",
+                "Initiatoren"
+            ],
+            "progression": true,
+            "sort-key": "Initiatoren-04"
+        },
+        {
+            "name": "Gekko",
+            "category": [
+                "Agenten",
+                "Initiatoren"
+            ],
+            "progression": true,
+            "sort-key": "Initiatoren-05"
+        },
+        {
+            "name": "Tejo",
+            "category": [
+                "Agenten",
+                "Initiatoren"
+            ],
+            "progression": true,
+            "sort-key": "Initiatoren-06"
+        },
+        {
+            "name": "Brimstone",
+            "category": [
+                "Agenten",
+                "Controller"
+            ],
+            "progression": true,
+            "sort-key": "Controller-00"
+        },
+        {
+            "name": "Viper",
+            "category": [
+                "Agenten",
+                "Controller"
+            ],
+            "progression": true,
+            "sort-key": "Controller-01"
+        },
+        {
+            "name": "Omen",
+            "category": [
+                "Agenten",
+                "Controller"
+            ],
+            "progression": true,
+            "sort-key": "Controller-02"
+        },
+        {
+            "name": "Astra",
+            "category": [
+                "Agenten",
+                "Controller"
+            ],
+            "progression": true,
+            "sort-key": "Controller-03"
+        },
+        {
+            "name": "Harbor",
+            "category": [
+                "Agenten",
+                "Controller"
+            ],
+            "progression": true,
+            "sort-key": "Controller-04"
+        },
+        {
+            "name": "Clove",
+            "category": [
+                "Agenten",
+                "Controller"
+            ],
+            "progression": true,
+            "sort-key": "Controller-05"
+        },
+        {
+            "name": "Miks",
+            "category": [
+                "Agenten",
+                "Controller"
+            ],
+            "progression": true,
+            "sort-key": "Controller-06"
+        },
+        {
+            "name": "Sage",
+            "category": [
+                "Agenten",
+                "Sentinels"
+            ],
+            "progression": true,
+            "sort-key": "Sentinels-00"
+        },
+        {
+            "name": "Cypher",
+            "category": [
+                "Agenten",
+                "Sentinels"
+            ],
+            "progression": true,
+            "sort-key": "Sentinels-01"
+        },
+        {
+            "name": "Killjoy",
+            "category": [
+                "Agenten",
+                "Sentinels"
+            ],
+            "progression": true,
+            "sort-key": "Sentinels-02"
+        },
+        {
+            "name": "Chamber",
+            "category": [
+                "Agenten",
+                "Sentinels"
+            ],
+            "progression": true,
+            "sort-key": "Sentinels-03"
+        },
+        {
+            "name": "Deadlock",
+            "category": [
+                "Agenten",
+                "Sentinels"
+            ],
+            "progression": true,
+            "sort-key": "Sentinels-04"
+        },
+        {
+            "name": "Vyse",
+            "category": [
+                "Agenten",
+                "Sentinels"
+            ],
+            "progression": true,
+            "sort-key": "Sentinels-05"
+        },
+        {
+            "name": "Veto",
+            "category": [
+                "Agenten",
+                "Sentinels"
+            ],
+            "progression": true,
+            "sort-key": "Sentinels-06"
+        },
+        {
+            "name": "Shorty",
+            "category": [
+                "Waffen",
+                "Sidearms"
+            ],
+            "progression": true,
+            "sort-key": "Sidearms-00"
+        },
+        {
+            "name": "Frenzy",
+            "category": [
+                "Waffen",
+                "Sidearms"
+            ],
+            "progression": true,
+            "sort-key": "Sidearms-01"
+        },
+        {
+            "name": "Ghost",
+            "category": [
+                "Waffen",
+                "Sidearms"
+            ],
+            "progression": true,
+            "sort-key": "Sidearms-02"
+        },
+        {
+            "name": "Bandit",
+            "category": [
+                "Waffen",
+                "Sidearms"
+            ],
+            "progression": true,
+            "sort-key": "Sidearms-03"
+        },
+        {
+            "name": "Sheriff",
+            "category": [
+                "Waffen",
+                "Sidearms"
+            ],
+            "progression": true,
+            "sort-key": "Sidearms-04"
+        },
+        {
+            "name": "Stinger",
+            "category": [
+                "Waffen",
+                "SMGs",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "SMGs-00"
+        },
+        {
+            "name": "Spectre",
+            "category": [
+                "Waffen",
+                "SMGs",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "SMGs-01"
+        },
+        {
+            "name": "Bucky",
+            "category": [
+                "Waffen",
+                "Shotguns",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Shotguns-00"
+        },
+        {
+            "name": "Judge",
+            "category": [
+                "Waffen",
+                "Shotguns",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Shotguns-01"
+        },
+        {
+            "name": "Bulldog",
+            "category": [
+                "Waffen",
+                "Rifles",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Rifles-00"
+        },
+        {
+            "name": "Guardian",
+            "category": [
+                "Waffen",
+                "Rifles",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Rifles-01"
+        },
+        {
+            "name": "Phantom",
+            "category": [
+                "Waffen",
+                "Rifles",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Rifles-02"
+        },
+        {
+            "name": "Vandal",
+            "category": [
+                "Waffen",
+                "Rifles",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Rifles-03"
+        },
+        {
+            "name": "Marshal",
+            "category": [
+                "Waffen",
+                "Sniper",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Sniper-00"
+        },
+        {
+            "name": "Outlaw",
+            "category": [
+                "Waffen",
+                "Sniper",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Sniper-01"
+        },
+        {
+            "name": "Operator",
+            "category": [
+                "Waffen",
+                "Sniper",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Sniper-02"
+        },
+        {
+            "name": "Ares",
+            "category": [
+                "Waffen",
+                "Heavies",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Heavies-00"
+        },
+        {
+            "name": "Odin",
+            "category": [
+                "Waffen",
+                "Heavies",
+                "Primärwaffen"
+            ],
+            "progression": true,
+            "sort-key": "Heavies-01"
+        },
+        {
+            "name": "Waffen aufheben",
+            "category": [
+                "Extras"
+            ],
+            "progression": true
+        },
+        {
+            "name": "Waffen requesten",
+            "category": [
+                "Extras"
+            ],
+            "progression": true
+        },
+        {
+            "name": "Sens verdoppelt (1 Match)",
+            "count": 5,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Sens halbiert (1 Match)",
+            "count": 5,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Maus invertiert (3 Runden)",
+            "count": 3,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Scope-Sens-Multiplikator 3 (1 Match)",
+            "count": 3,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Cursed Crosshair (1 Match)",
+            "count": 10,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Kein Crosshair (5 Runden)",
+            "count": 3,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Minimap winzig und drehend (1 Match)",
+            "count": 4,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Kleinstmögliche Auflösung (1 Match)",
+            "count": 3,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        },
+        {
+            "name": "Main Volume 0 (3 Runden)",
+            "count": 3,
+            "trap": true,
+            "category": [
+                "Ingame Traps"
+            ]
+        }
+    ]
+}

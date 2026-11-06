@@ -1,0 +1,709 @@
+{
+    "$schema": "https://github.com/ManualForArchipelago/Manual/raw/main/schemas/Manual.locations.schema.json",
+    "data": [
+        {
+            "name": "Jett - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Jett|"
+        },
+        {
+            "name": "Jett - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Jett| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Jett - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Jett| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Phoenix - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Phoenix|"
+        },
+        {
+            "name": "Phoenix - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Phoenix| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Phoenix - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Phoenix| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Raze - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Raze|"
+        },
+        {
+            "name": "Raze - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Raze| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Raze - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Raze| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Reyna - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Reyna|"
+        },
+        {
+            "name": "Reyna - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Reyna| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Reyna - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Reyna| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Yoru - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Yoru|"
+        },
+        {
+            "name": "Yoru - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Yoru| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Yoru - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Yoru| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Neon - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Neon|"
+        },
+        {
+            "name": "Neon - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Neon| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Neon - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Neon| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Iso - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Iso|"
+        },
+        {
+            "name": "Iso - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Iso| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Iso - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Iso| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Waylay - Win",
+            "category": [
+                "Duelisten",
+                "Wins"
+            ],
+            "requires": "|Waylay|"
+        },
+        {
+            "name": "Waylay - Ace",
+            "category": [
+                "Duelisten",
+                "Aces"
+            ],
+            "requires": "|Waylay| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Waylay - 25 Kill Bomb",
+            "category": [
+                "Duelisten",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Waylay| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Sova - Win",
+            "category": [
+                "Initiatoren",
+                "Wins"
+            ],
+            "requires": "|Sova|"
+        },
+        {
+            "name": "Sova - Ace",
+            "category": [
+                "Initiatoren",
+                "Aces"
+            ],
+            "requires": "|Sova| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Sova - 25 Kill Bomb",
+            "category": [
+                "Initiatoren",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Sova| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Breach - Win",
+            "category": [
+                "Initiatoren",
+                "Wins"
+            ],
+            "requires": "|Breach|"
+        },
+        {
+            "name": "Breach - Ace",
+            "category": [
+                "Initiatoren",
+                "Aces"
+            ],
+            "requires": "|Breach| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Breach - 25 Kill Bomb",
+            "category": [
+                "Initiatoren",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Breach| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Skye - Win",
+            "category": [
+                "Initiatoren",
+                "Wins"
+            ],
+            "requires": "|Skye|"
+        },
+        {
+            "name": "Skye - Ace",
+            "category": [
+                "Initiatoren",
+                "Aces"
+            ],
+            "requires": "|Skye| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Skye - 25 Kill Bomb",
+            "category": [
+                "Initiatoren",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Skye| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "KAY/O - Win",
+            "category": [
+                "Initiatoren",
+                "Wins"
+            ],
+            "requires": "|KAY/O|"
+        },
+        {
+            "name": "KAY/O - Ace",
+            "category": [
+                "Initiatoren",
+                "Aces"
+            ],
+            "requires": "|KAY/O| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "KAY/O - 25 Kill Bomb",
+            "category": [
+                "Initiatoren",
+                "25 Kill Bombs"
+            ],
+            "requires": "|KAY/O| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Fade - Win",
+            "category": [
+                "Initiatoren",
+                "Wins"
+            ],
+            "requires": "|Fade|"
+        },
+        {
+            "name": "Fade - Ace",
+            "category": [
+                "Initiatoren",
+                "Aces"
+            ],
+            "requires": "|Fade| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Fade - 25 Kill Bomb",
+            "category": [
+                "Initiatoren",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Fade| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Gekko - Win",
+            "category": [
+                "Initiatoren",
+                "Wins"
+            ],
+            "requires": "|Gekko|"
+        },
+        {
+            "name": "Gekko - Ace",
+            "category": [
+                "Initiatoren",
+                "Aces"
+            ],
+            "requires": "|Gekko| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Gekko - 25 Kill Bomb",
+            "category": [
+                "Initiatoren",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Gekko| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Tejo - Win",
+            "category": [
+                "Initiatoren",
+                "Wins"
+            ],
+            "requires": "|Tejo|"
+        },
+        {
+            "name": "Tejo - Ace",
+            "category": [
+                "Initiatoren",
+                "Aces"
+            ],
+            "requires": "|Tejo| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Tejo - 25 Kill Bomb",
+            "category": [
+                "Initiatoren",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Tejo| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Brimstone - Win",
+            "category": [
+                "Controller",
+                "Wins"
+            ],
+            "requires": "|Brimstone|"
+        },
+        {
+            "name": "Brimstone - Ace",
+            "category": [
+                "Controller",
+                "Aces"
+            ],
+            "requires": "|Brimstone| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Brimstone - 25 Kill Bomb",
+            "category": [
+                "Controller",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Brimstone| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Viper - Win",
+            "category": [
+                "Controller",
+                "Wins"
+            ],
+            "requires": "|Viper|"
+        },
+        {
+            "name": "Viper - Ace",
+            "category": [
+                "Controller",
+                "Aces"
+            ],
+            "requires": "|Viper| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Viper - 25 Kill Bomb",
+            "category": [
+                "Controller",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Viper| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Omen - Win",
+            "category": [
+                "Controller",
+                "Wins"
+            ],
+            "requires": "|Omen|"
+        },
+        {
+            "name": "Omen - Ace",
+            "category": [
+                "Controller",
+                "Aces"
+            ],
+            "requires": "|Omen| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Omen - 25 Kill Bomb",
+            "category": [
+                "Controller",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Omen| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Astra - Win",
+            "category": [
+                "Controller",
+                "Wins"
+            ],
+            "requires": "|Astra|"
+        },
+        {
+            "name": "Astra - Ace",
+            "category": [
+                "Controller",
+                "Aces"
+            ],
+            "requires": "|Astra| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Astra - 25 Kill Bomb",
+            "category": [
+                "Controller",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Astra| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Harbor - Win",
+            "category": [
+                "Controller",
+                "Wins"
+            ],
+            "requires": "|Harbor|"
+        },
+        {
+            "name": "Harbor - Ace",
+            "category": [
+                "Controller",
+                "Aces"
+            ],
+            "requires": "|Harbor| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Harbor - 25 Kill Bomb",
+            "category": [
+                "Controller",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Harbor| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Clove - Win",
+            "category": [
+                "Controller",
+                "Wins"
+            ],
+            "requires": "|Clove|"
+        },
+        {
+            "name": "Clove - Ace",
+            "category": [
+                "Controller",
+                "Aces"
+            ],
+            "requires": "|Clove| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Clove - 25 Kill Bomb",
+            "category": [
+                "Controller",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Clove| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Miks - Win",
+            "category": [
+                "Controller",
+                "Wins"
+            ],
+            "requires": "|Miks|"
+        },
+        {
+            "name": "Miks - Ace",
+            "category": [
+                "Controller",
+                "Aces"
+            ],
+            "requires": "|Miks| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Miks - 25 Kill Bomb",
+            "category": [
+                "Controller",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Miks| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Sage - Win",
+            "category": [
+                "Sentinels",
+                "Wins"
+            ],
+            "requires": "|Sage|"
+        },
+        {
+            "name": "Sage - Ace",
+            "category": [
+                "Sentinels",
+                "Aces"
+            ],
+            "requires": "|Sage| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Sage - 25 Kill Bomb",
+            "category": [
+                "Sentinels",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Sage| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Cypher - Win",
+            "category": [
+                "Sentinels",
+                "Wins"
+            ],
+            "requires": "|Cypher|"
+        },
+        {
+            "name": "Cypher - Ace",
+            "category": [
+                "Sentinels",
+                "Aces"
+            ],
+            "requires": "|Cypher| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Cypher - 25 Kill Bomb",
+            "category": [
+                "Sentinels",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Cypher| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Killjoy - Win",
+            "category": [
+                "Sentinels",
+                "Wins"
+            ],
+            "requires": "|Killjoy|"
+        },
+        {
+            "name": "Killjoy - Ace",
+            "category": [
+                "Sentinels",
+                "Aces"
+            ],
+            "requires": "|Killjoy| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Killjoy - 25 Kill Bomb",
+            "category": [
+                "Sentinels",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Killjoy| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Chamber - Win",
+            "category": [
+                "Sentinels",
+                "Wins"
+            ],
+            "requires": "|Chamber|"
+        },
+        {
+            "name": "Chamber - Ace",
+            "category": [
+                "Sentinels",
+                "Aces"
+            ],
+            "requires": "|Chamber| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Chamber - 25 Kill Bomb",
+            "category": [
+                "Sentinels",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Chamber| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Deadlock - Win",
+            "category": [
+                "Sentinels",
+                "Wins"
+            ],
+            "requires": "|Deadlock|"
+        },
+        {
+            "name": "Deadlock - Ace",
+            "category": [
+                "Sentinels",
+                "Aces"
+            ],
+            "requires": "|Deadlock| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Deadlock - 25 Kill Bomb",
+            "category": [
+                "Sentinels",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Deadlock| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Vyse - Win",
+            "category": [
+                "Sentinels",
+                "Wins"
+            ],
+            "requires": "|Vyse|"
+        },
+        {
+            "name": "Vyse - Ace",
+            "category": [
+                "Sentinels",
+                "Aces"
+            ],
+            "requires": "|Vyse| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Vyse - 25 Kill Bomb",
+            "category": [
+                "Sentinels",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Vyse| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Veto - Win",
+            "category": [
+                "Sentinels",
+                "Wins"
+            ],
+            "requires": "|Veto|"
+        },
+        {
+            "name": "Veto - Ace",
+            "category": [
+                "Sentinels",
+                "Aces"
+            ],
+            "requires": "|Veto| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
+        },
+        {
+            "name": "Veto - 25 Kill Bomb",
+            "category": [
+                "Sentinels",
+                "25 Kill Bombs"
+            ],
+            "requires": "|Veto| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
+        },
+        {
+            "name": "Unrated-Legende",
+            "category": [
+                "Ziel"
+            ],
+            "victory": true,
+            "requires": "{OptionCount(@Agenten, goal_agents)} and {OptionCount(@Waffen, goal_weapons)}"
+        }
+    ]
+}

@@ -1,0 +1,41 @@
+{
+  "game": "CustomOverwatch",
+  "creator": "AF",
+  "filler_item_name": "Applaus vom Chat",
+  "starting_items": [
+    {
+      "item_categories": [
+        "Rollen-Pässe"
+      ],
+      "random": 1
+    },
+    {
+      "item_categories": [
+        "Tank"
+      ],
+      "random": 2,
+      "if_previous_item": [
+        "Tank-Pass"
+      ]
+    },
+    {
+      "item_categories": [
+        "Damage"
+      ],
+      "random": 2,
+      "if_previous_item": [
+        "Damage-Pass"
+      ]
+    },
+    {
+      "item_categories": [
+        "Support"
+      ],
+      "random": 2,
+      "if_previous_item": [
+        "Support-Pass"
+      ]
+    }
+  ],
+  "death_link": false
+}

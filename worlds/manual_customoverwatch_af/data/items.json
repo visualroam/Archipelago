@@ -1,0 +1,504 @@
+[
+  {
+    "name": "D.Mon",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "D.Va",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Domina",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Doomfist",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Hazard",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Junker Queen",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Mauga",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Orisa",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Ramattra",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Reinhardt",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Roadhog",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Sigma",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Winston",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Wrecking Ball",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Zarya",
+    "category": [
+      "Tank"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Anran",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Ashe",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Bastion",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Cassidy",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Echo",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Emre",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Freja",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Genji",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Hanzo",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Junkrat",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Mei",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Pharah",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Reaper",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Shion",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Sierra",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Soldier 76",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Sojourn",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Symmetra",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Torbjörn",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Tracer",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Vendetta",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Venture",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Widowmaker",
+    "category": [
+      "Damage"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Ana",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Baptiste",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Brigitte",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Doctrine",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Illari",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Jetpack Cat",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Juno",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Kiriko",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Lifeweaver",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Lúcio",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Mercy",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Mizuki",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Moira",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Sombra",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Wuyang",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Zenyatta",
+    "category": [
+      "Support"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Tank-Pass",
+    "category": [
+      "Rollen-Pässe"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Damage-Pass",
+    "category": [
+      "Rollen-Pässe"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Support-Pass",
+    "category": [
+      "Rollen-Pässe"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Hero Swap",
+    "category": [
+      "Extras"
+    ],
+    "progression": true
+  },
+  {
+    "name": "Sens halbieren oder verdoppeln (2 Games)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 5
+  },
+  {
+    "name": "Invert Look (1 Game)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 4
+  },
+  {
+    "name": "FOV 80 (2 Games)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 5
+  },
+  {
+    "name": "Cursed Crosshair (2 Games)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 5
+  },
+  {
+    "name": "Unsichtbares Crosshair (1 Game)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 4
+  },
+  {
+    "name": "Tritanopie-Filter (2 Games)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 5
+  },
+  {
+    "name": "Render Scale Minimum (2 Games)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 4
+  },
+  {
+    "name": "Fähigkeit 1 und 2 vertauscht (1 Game)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 5
+  },
+  {
+    "name": "Springen und Ducken vertauscht (1 Game)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 4
+  },
+  {
+    "name": "Primär- und Sekundärfeuer vertauscht (1 Game)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 4
+  },
+  {
+    "name": "UI aus (1 Game)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 4
+  },
+  {
+    "name": "Kein Sound (1 Game)",
+    "category": [
+      "Ingame-Traps"
+    ],
+    "trap": true,
+    "count": 4
+  }
+]
