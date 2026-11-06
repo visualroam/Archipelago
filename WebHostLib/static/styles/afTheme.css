@@ -359,3 +359,8 @@ a.af-card:hover .go i { transform: translateX(4px); }
     #generate-game, #host-game, #view-seed, #wait-seed, #check, #check-result, #user-content, #start-playing,
     #games, #tutorial-landing, #host-room, #player-options, #weighted-options, main > .markdown { padding: 24px 18px 18px !important; }
 }
+
+/* Abhak-Links (Raum-Seite, nur Besitzer) */
+#af-check-links { margin-top: 28px; padding-top: 22px; border-top: 2px solid var(--track); }
+#af-check-links p { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 6px 0 14px; }
+#af-check-links button { padding: 7px 12px !important; font-size: 13px !important; }

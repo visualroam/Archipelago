@@ -5,18 +5,31 @@ AF Charity: eigener Tracker für jeden Slot und eine Raum-Übersicht.
 - /tracker/<id>/<team>/<slot> → Slot-Tracker, für jedes Spiel
 - /tracker/<id>/Generic       → alte Tabellen-Übersicht, /generic_tracker/… → alter Slot-Tracker
 
-Welten mit `tracker_logic(slot_data)` (die AF-Welten) bekommen zusätzlich „in Logik / gesperrt“, berechnet aus
+Welten mit `tracker_logic(slot_data)` (AF-Welten) und alle Manual-Welten bekommen zusätzlich „in Logik / gesperrt“, berechnet aus
 denselben Regeln, die die World beim Generieren benutzt. Alle anderen Spiele: Checks, Items, Hinweise.
+
+Abhaken (nur Welten ohne Client, also AF/Manual): Wer den geheimen Link des Slots hat (`…/<slot>#check=<key>`,
+steht für den Raum-Besitzer auf der Raum-Seite), kann im Tracker Checks abhaken und das Ziel melden.
+Der Tracker legt dafür einen Server-Befehl an (/send_location bzw. /goal), den der Raum binnen ~5 s ausführt.
 """
 from __future__ import annotations
 
 import collections
 import datetime
+import hashlib
+import hmac
 import re
+import shlex
 import unicodedata
 from typing import Any, Callable, Dict, List, Optional, Tuple
+from uuid import UUID
 
-from flask import render_template
+from flask import abort, jsonify, render_template, request, url_for
+from pony.orm import commit
+
+from Utils import utcnow
+from . import app
+from .models import Command, Room
 
 from NetUtils import ClientStatus, NetworkItem
 from worlds.AutoWorld import AutoWorldRegister
@@ -50,6 +63,7 @@ GAME_CATALOG = [
     ("Ratchet & Clank 3", ["Ratchet and Clank 3", "Ratchet & Clank: Up Your Arsenal"], "4540_IGDB"),
     ("Nine Sols", [], "715052357_IGDB"),
     ("Unfair Flips", [], "1786539857_IGDB"),
+    ("R.E.P.O.", [], "1294658629_IGDB"),
 ]
 
 
@@ -58,7 +72,7 @@ def game_key(name: str) -> str:
 
 
 def cover_url(game: str, width: int = 285) -> Optional[str]:
-    """Twitch-Box-Art zum AP-Spielnamen („AF Overwatch“ → Overwatch, „Minecraft Fabric“ → Minecraft)."""
+    """Twitch-Box-Art zum AP-Spielnamen („AF Overwatch“, „Manual_CustomOverwatch_AF“ → Overwatch, „Minecraft Fabric“ → Minecraft)."""
     key = game_key(re.sub(r"^AF\s+", "", game))
     best = None
     for name, aliases, box_art in GAME_CATALOG:
@@ -66,9 +80,18 @@ def cover_url(game: str, width: int = 285) -> Optional[str]:
             k = game_key(candidate)
             if key == k:
                 return f"https://static-cdn.jtvnw.net/ttv-boxart/{box_art}-{width}x{width * 4 // 3}.jpg"
-            if key.startswith(k) and (best is None or len(k) > best[0]):
+            if k in key and (best is None or len(k) > best[0]):
                 best = (len(k), box_art)
     return f"https://static-cdn.jtvnw.net/ttv-boxart/{best[1]}-{width}x{width * 4 // 3}.jpg" if best else None
+
+
+def display_game(game: str) -> str:
+    """Anzeigename: „Manual_CustomOverwatch_AF“ → „Custom Overwatch · Manual“, sonst unverändert."""
+    m = re.match(r"^Manual_(.+?)_[^_]+$", game)
+    if not m:
+        return game
+    name = re.sub(r"(?<=[a-z])(?=[A-Z])", " ", m.group(1)).replace("_", " ")
+    return f"{name} · Manual"
 
 
 def natural_key(text: str):
@@ -165,10 +188,13 @@ def group_locations(game: str, names: List[str]) -> Dict[str, List[str]]:
             for title, members in sorted(groups.items(), key=lambda g: (g[0] == "Sonstige", natural_key(g[0])))}
 
 
-# ─── Logik (AF-Welten) ───────────────────────────────────────────────────────
+# ─── Logik ───────────────────────────────────────────────────────────────────
+# Zwei Quellen, gleiche Form {rules, goal, counters, groups}:
+#   - AF-Welten: World.tracker_logic(slot_data) – dieselben Regeln wie set_rules
+#   - Manual-Welten: die „requires“-Strings aus locations.json, ausgewertet wie im Manual-Framework
 
 def make_has(inventory: collections.Counter, missing: List[str]) -> Callable[..., bool]:
-    """has() für tracker_logic-Regeln: zählt im Inventar und merkt sich, was fehlt."""
+    """has() für Regeln: zählt im Inventar und merkt sich, was fehlt. Manual-Regeln nutzen has.inventory/has.missing."""
     def has(item, count: int = 1) -> bool:
         if isinstance(item, (list, tuple, set)):
             ok = any(inventory[name] > 0 for name in item)
@@ -181,6 +207,8 @@ def make_has(inventory: collections.Counter, missing: List[str]) -> Callable[...
         if not ok:
             missing.append(item if count == 1 else f"{item} {inventory[item]}/{count}")
         return ok
+    has.inventory = inventory
+    has.missing = missing
     return has
 
 
@@ -192,23 +220,238 @@ def evaluate(rule: Optional[Callable], inventory: collections.Counter) -> Tuple[
     return ok, missing
 
 
-def build_logic(game: str, slot_data: Dict[str, Any], inventory: collections.Counter) -> Optional[Dict[str, Any]]:
+def is_manual(world) -> bool:
+    return world is not None and hasattr(world, "location_name_to_location") and hasattr(world, "item_name_to_item")
+
+
+def has_logic(world) -> bool:
+    return world is not None and (hasattr(world, "tracker_logic") or is_manual(world))
+
+
+_MANUAL_TOKEN = re.compile(r"\|[^|]+\||\{[^{}]+\}|\(|\)|\band\b|\bor\b", re.IGNORECASE)
+_MANUAL_COUNT = re.compile(r"^\s*(\d+%?|ALL|HALF)\s*$", re.IGNORECASE)
+
+
+class ManualRules:
+    """Wertet Manual-„requires“ aus: |Item|, |Item:3|, |@Kategorie:5|, |…:ALL|, |…:HALF|, |…:50%|, and/or/Klammern,
+    {OptionCount(@Kat, option)}, {OptionCountPercent(…)}, {YamlEnabled(o)}, {YamlDisabled(o)}.
+    Unbekannte {Funktionen} gelten als erfüllt (lieber zu offen als fälschlich gesperrt)."""
+
+    def __init__(self, world, slot_data: Dict[str, Any]):
+        self.items: Dict[str, Dict[str, Any]] = world.item_name_to_item
+        self.groups: Dict[str, set] = {k: set(v) for k, v in world.item_name_groups.items()}
+        self.options = slot_data or {}
+
+    # Ziel-Anzahl und vorhandene Anzahl für „Item“ oder „@Kategorie“
+    def _total(self, ref: str) -> int:
+        names = self.groups.get(ref[1:], set()) if ref.startswith("@") else {ref}
+        return sum(int(self.items.get(n, {}).get("count", 1)) for n in names)
+
+    def _have(self, ref: str, inventory) -> int:
+        if ref.startswith("@"):
+            return sum(inventory[n] for n in self.groups.get(ref[1:], ()))
+        return inventory[ref]
+
+    def _need(self, ref: str, spec: str) -> int:
+        spec = spec.strip().upper()
+        if spec == "ALL":
+            return self._total(ref)
+        if spec == "HALF":
+            return max(1, self._total(ref) // 2)
+        if spec.endswith("%"):
+            return max(1, self._total(ref) * int(spec[:-1]) // 100)
+        return int(spec)
+
+    def _check(self, ref: str, need: int, inventory) -> Tuple[bool, List[str]]:
+        have = self._have(ref, inventory)
+        if have >= need:
+            return True, []
+        label = ref[1:] if ref.startswith("@") else ref
+        return False, [label if need == 1 and not ref.startswith("@") else f"{label} {have}/{need}"]
+
+    def _item(self, token: str, inventory) -> Tuple[bool, List[str]]:
+        inner = token[1:-1].strip()
+        if inner in self.items or inner[1:] in self.groups and inner.startswith("@"):
+            return self._check(inner, 1, inventory)
+        if ":" in inner:
+            ref, spec = inner.rsplit(":", 1)
+            if _MANUAL_COUNT.match(spec):
+                return self._check(ref.strip(), self._need(ref.strip(), spec), inventory)
+        return self._check(inner, 1, inventory)
+
+    def _func(self, token: str, inventory) -> Tuple[bool, List[str]]:
+        m = re.match(r"\{\s*(\w+)\s*\((.*)\)\s*\}$", token, re.S)
+        if not m:
+            return True, []
+        name, args = m.group(1), [a.strip() for a in m.group(2).split(",")]
+        if name in ("OptionCount", "OptionCountPercent") and len(args) == 2:
+            value = self.options.get(args[1])
+            if not isinstance(value, (int, float)) or isinstance(value, bool):
+                return True, []
+            spec = f"{int(value)}%" if name == "OptionCountPercent" else str(int(value))
+            if spec in ("0", "0%"):
+                return True, []
+            return self._check(args[0], self._need(args[0], spec), inventory)
+        if name == "YamlEnabled" and args:
+            return bool(self.options.get(args[0])), []
+        if name == "YamlDisabled" and args:
+            return not self.options.get(args[0]), []
+        return True, []
+
+    def compile(self, requires) -> Optional[Callable]:
+        if not requires:
+            return None
+        if isinstance(requires, list):  # Listen-Form: alle Items nötig, {"or": [...]} = eins davon
+            parts = []
+            for entry in requires:
+                if isinstance(entry, dict) and "or" in entry:
+                    parts.append("(" + " or ".join(f"|{x}|" for x in entry["or"]) + ")")
+                else:
+                    parts.append(f"|{entry}|")
+            requires = " and ".join(parts)
+        tokens = _MANUAL_TOKEN.findall(str(requires))
+
+        def rule(has) -> bool:
+            ok, missing = self._parse(tokens, has.inventory)
+            has.missing.extend(missing)
+            return ok
+        return rule
+
+    def _parse(self, tokens: List[str], inventory) -> Tuple[bool, List[str]]:
+        pos = 0
+
+        def expr():
+            nonlocal pos
+            ok, miss = term()
+            while pos < len(tokens) and tokens[pos].lower() == "or":
+                pos += 1
+                ok2, miss2 = term()
+                if ok or ok2:
+                    ok, miss = True, []
+                else:  # beide offen → den kürzeren Weg zeigen
+                    miss = min(miss, miss2, key=len)
+            return ok, miss
+
+        def term():
+            nonlocal pos
+            ok, miss = factor()
+            while pos < len(tokens) and tokens[pos].lower() == "and":
+                pos += 1
+                ok2, miss2 = factor()
+                ok, miss = ok and ok2, miss + miss2
+            return ok, miss
+
+        def factor():
+            nonlocal pos
+            if pos >= len(tokens):
+                return True, []
+            token = tokens[pos]
+            pos += 1
+            if token == "(":
+                result = expr()
+                if pos < len(tokens) and tokens[pos] == ")":
+                    pos += 1
+                return result
+            if token.startswith("|"):
+                return self._item(token, inventory)
+            if token.startswith("{"):
+                return self._func(token, inventory)
+            return True, []
+
+        return expr()
+
+    def counters(self, requires) -> List[Dict[str, Any]]:
+        """Zähl-Ziele aus dem Goal: |@Kat:N|, |Item:N|, {OptionCount(@Kat, o)} – je Ziel der kleinste Wert."""
+        found: Dict[str, int] = {}
+        for token in _MANUAL_TOKEN.findall(str(requires or "")):
+            ref, need = None, None
+            if token.startswith("|"):
+                inner = token[1:-1].strip()
+                if ":" in inner and inner not in self.items:
+                    r, spec = inner.rsplit(":", 1)
+                    if _MANUAL_COUNT.match(spec):
+                        ref, need = r.strip(), self._need(r.strip(), spec)
+            elif token.startswith("{"):
+                m = re.match(r"\{\s*(OptionCount(?:Percent)?)\s*\((.*)\)\s*\}$", token, re.S)
+                if m:
+                    args = [a.strip() for a in m.group(2).split(",")]
+                    value = self.options.get(args[1]) if len(args) == 2 else None
+                    if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                        ref = args[0]
+                        need = self._need(ref, f"{value}%" if m.group(1).endswith("Percent") else str(value))
+            if ref and need and need > 1:
+                found[ref] = min(found.get(ref, need), need)
+        return [{"item": ref[1:] if ref.startswith("@") else ref,
+                 "names": sorted(self.groups.get(ref[1:], ())) if ref.startswith("@") else [ref],
+                 "required": need} for ref, need in found.items()]
+
+
+def manual_logic(world, slot_data: Dict[str, Any]) -> Dict[str, Any]:
+    manual = ManualRules(world, slot_data)
+    locations: Dict[str, Dict[str, Any]] = world.location_name_to_location
+    rules = {name: manual.compile(loc.get("requires")) for name, loc in locations.items()}
+
+    victories = [name for name, loc in locations.items() if loc.get("victory")]
+    goal = None
+    if victories:
+        index = slot_data.get("goal") if isinstance(slot_data.get("goal"), int) else 0
+        goal = victories[index] if 0 <= index < len(victories) else victories[0]
+
+    # Freischaltungen: Kategorien der Fortschritts-Items (ohne versteckte/Traps), Überschneidungen nur einmal
+    hidden = {name for name, cat in (getattr(world, "category_table", {}) or {}).items()
+              if isinstance(cat, dict) and cat.get("hidden")}
+    progression = [i for i in world.item_name_to_item.values()
+                   if (i.get("progression") or i.get("progression_skip_balancing")) and not i.get("trap")]
+    order: List[str] = []
+    members: Dict[str, List[str]] = collections.defaultdict(list)
+    for item in progression:
+        for cat in item.get("category", []):
+            if cat not in hidden:
+                if cat not in members:
+                    order.append(cat)
+                members[cat].append(item["name"])
+    covered: set = set()
+    chosen = []
+    for cat in sorted(order, key=lambda c: len(members[c])):
+        if set(members[cat]) - covered:
+            chosen.append(cat)
+            covered |= set(members[cat])
+    groups = [{"title": cat, "items": members[cat]} for cat in order if cat in chosen]
+
+    return {
+        "rules": rules,
+        "goal": goal,
+        "counters": manual.counters(locations[goal].get("requires")) if goal else [],
+        "groups": groups,
+    }
+
+
+def logic_source(game: str, slot_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     world = world_of(game)
-    if world is None or not hasattr(world, "tracker_logic") or not slot_data:
+    if world is None or not slot_data:
         return None
     try:
-        logic = world.tracker_logic(slot_data)
+        if hasattr(world, "tracker_logic"):
+            return world.tracker_logic(slot_data)
+        if is_manual(world):
+            return manual_logic(world, slot_data)
     except Exception:  # alter Seed ohne passende slot_data → einfach ohne Logik anzeigen
+        return None
+    return None
+
+
+def build_logic(game: str, slot_data: Dict[str, Any], inventory: collections.Counter) -> Optional[Dict[str, Any]]:
+    logic = logic_source(game, slot_data)
+    if not logic:
         return None
 
     goal_name = logic.get("goal")
     goal_ok, goal_missing = evaluate(logic["rules"].get(goal_name), inventory) if goal_name else (False, [])
-    counters = [{
-        "item": c["item"],
-        "have": inventory[c["item"]],
-        "required": c["required"],
-        "pct": min(100, round(100 * inventory[c["item"]] / c["required"])) if c["required"] else 100,
-    } for c in logic.get("counters", [])]
+    counters = []
+    for c in logic.get("counters", []):
+        have = sum(inventory[n] for n in c["names"]) if "names" in c else inventory[c["item"]]
+        counters.append({"item": c["item"], "have": have, "required": c["required"],
+                         "pct": min(100, round(100 * have / c["required"])) if c["required"] else 100})
 
     groups = []
     for group in logic.get("groups", []):
@@ -230,17 +473,102 @@ def build_logic(game: str, slot_data: Dict[str, Any], inventory: collections.Cou
 
 
 def _unlock_names(game: str, slot_data: Dict[str, Any]) -> set:
-    world = world_of(game)
-    if world is None or not hasattr(world, "tracker_logic") or not slot_data:
+    logic = logic_source(game, slot_data)
+    if not logic:
         return set()
-    try:
-        logic = world.tracker_logic(slot_data)
-    except Exception:
-        return set()
-    names = {c["item"] for c in logic.get("counters", [])}
+    names = set()
+    for c in logic.get("counters", []):
+        names.update(c.get("names", [c["item"]]))
     for group in logic.get("groups", []):
         names.update(group["items"] if not group.get("progressive") else [group["progressive"]])
     return names
+
+
+def inventory_by_name(tracker_data, team: int, player: int) -> collections.Counter:
+    """Inventar nach Item-Namen, inkl. Start-Items."""
+    game = tracker_data.get_player_game(player)
+    inventory = collections.Counter()
+    for item_id, count in tracker_data.get_player_inventory_counts(team, player).items():
+        inventory[tracker_data.item_id_to_name[game][item_id]] += count
+    return inventory
+
+
+# ─── Abhaken (Welten ohne Client) ────────────────────────────────────────────
+
+def can_check_off(game: str) -> bool:
+    """Nur Welten, die ohnehin von Hand abgehakt werden (AF-/Manual-Welten), nie echte Spiele mit Client."""
+    world = world_of(game)
+    return world is not None and not getattr(world, "hidden", False) and has_logic(world)
+
+
+def check_key(room_id: UUID, team: int, player: int) -> str:
+    secret = app.config["SECRET_KEY"]
+    secret = secret if isinstance(secret, bytes) else str(secret).encode()
+    return hmac.new(secret, f"af-check:{room_id}:{team}:{player}".encode(), hashlib.sha256).hexdigest()[:24]
+
+
+def check_links(room) -> List[Dict[str, Any]]:
+    """Abhak-Links pro Slot – nur für den Raum-Besitzer auf der (nicht gecachten) Raum-Seite."""
+    if not room.tracker:
+        return []
+    links = []
+    for slot in sorted(room.seed.slots, key=lambda s: s.player_id):
+        if can_check_off(slot.game):
+            url = url_for("get_player_tracker", tracker=room.tracker, tracked_team=0, tracked_player=slot.player_id,
+                          _external=True)
+            links.append({"player": slot.player_id, "name": slot.player_name, "game": display_game(slot.game),
+                          "url": f"{url}#check={check_key(room.id, 0, slot.player_id)}"})
+    return links
+
+
+app.jinja_env.globals["af_check_links"] = check_links
+
+
+@app.route("/tracker/<suuid:tracker>/<int:team>/<int:player>/check", methods=["GET", "POST"])
+def af_check_off(tracker: UUID, team: int, player: int):
+    from .tracker import TrackerData  # hier importieren: tracker.py importiert dieses Modul ebenfalls
+
+    room = Room.get(tracker=tracker)
+    if room is None:
+        abort(404)
+    tracker_data = TrackerData(room)
+    if player not in tracker_data._multidata["slot_info"] or team != 0:
+        abort(404)
+    game = tracker_data.get_player_game(player)
+    data = (request.get_json(silent=True) or {}) if request.method == "POST" else {}
+    key = request.args.get("key", "") if request.method == "GET" else str(data.get("key", ""))
+    valid = can_check_off(game) and hmac.compare_digest(key, check_key(room.id, team, player))
+    if request.method == "GET":
+        return jsonify(ok=valid)
+    if not valid:
+        return jsonify(ok=False, error="Link ungültig"), 403
+
+    name = tracker_data.get_player_name(player)
+    if data.get("goal"):
+        if tracker_data.get_player_client_status(team, player) == ClientStatus.CLIENT_GOAL:
+            return jsonify(ok=True, already=True)
+        logic = build_logic(game, tracker_data.get_slot_data(player), inventory_by_name(tracker_data, team, player))
+        if not logic or not logic["goal"] or not logic["goal"]["ok"]:
+            return jsonify(ok=False, error="Das Ziel ist laut Logik noch nicht erreichbar."), 409
+        command = f"/goal {shlex.quote(name)}"
+    else:
+        try:
+            location = int(data.get("location"))
+        except (TypeError, ValueError):
+            return jsonify(ok=False, error="Location fehlt"), 400
+        if location not in tracker_data.get_player_locations(player):
+            return jsonify(ok=False, error="Diese Location gehört nicht zu diesem Slot"), 400
+        if location in tracker_data.get_player_checked_locations(team, player):
+            return jsonify(ok=True, already=True)
+        command = f"/send_location {shlex.quote(name)} {location}"
+
+    Command(room=room, commandtext=command)
+    # Raum aufwecken, falls er schläft (wie ein Aufruf der Raum-Seite) – sonst wartet der Befehl
+    now = utcnow()
+    if now - room.last_activity > datetime.timedelta(minutes=1):
+        room.last_activity = now
+    commit()
+    return jsonify(ok=True)
 
 
 # ─── Slot-Tracker ────────────────────────────────────────────────────────────
@@ -252,10 +580,7 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
     item_names = tracker_data.item_id_to_name
     location_names = tracker_data.location_id_to_name
 
-    # Inventar nach Namen (inkl. Start-Items)
-    inventory = collections.Counter()
-    for item_id, count in tracker_data.get_player_inventory_counts(team, player).items():
-        inventory[item_names[game][item_id]] += count
+    inventory = inventory_by_name(tracker_data, team, player)
 
     # Empfangene Items: Reihenfolge, Herkunft, Art
     received: List[NetworkItem] = list(tracker_data.get_player_received_items(team, player))
@@ -330,7 +655,8 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
         if logic and not done:
             ok, missing = evaluate(logic["rules"].get(name), inventory)
             state = "logic" if ok else "locked"
-        rows.append({"name": name, "label": name, "state": state, "missing": missing, "hint": hinted_here.get(name)})
+        rows.append({"id": location_id, "name": name, "label": name, "state": state, "missing": missing,
+                     "hint": hinted_here.get(name)})
 
     if logic:
         titles = {"logic": "Jetzt spielbar", "locked": "Gesperrt", "done": "Erledigt"}
@@ -364,8 +690,9 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
         team=team,
         player=player,
         player_name=names[(team, player)],
-        game=game,
+        game=display_game(game),
         cover=cover_url(game),
+        checkable=can_check_off(game),
         status_text=status_text,
         status_class=status_class,
         last_activity=ago(tracker_data.get_player_last_activity(team, player)),
@@ -381,7 +708,7 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
         looking_for=looking_for,
         to_find=to_find,
         found_hints=found_hints,
-        slots=[{"team": t, "player": p, "name": names[(t, p)], "game": games[(t, p)]}
+        slots=[{"team": t, "player": p, "name": names[(t, p)], "game": display_game(games[(t, p)])}
                for t, p in visible_players(tracker_data)],
         saving_second=tracker_data.get_room_saving_second(),
     )
@@ -403,7 +730,7 @@ def render_af_room_tracker(tracker_data) -> str:
             "team": team,
             "player": player,
             "name": names[(team, player)],
-            "game": games[(team, player)],
+            "game": display_game(games[(team, player)]),
             "cover": cover_url(games[(team, player)]),
             "done": done,
             "total": total,
@@ -413,7 +740,7 @@ def render_af_room_tracker(tracker_data) -> str:
             "last_activity": ago(delta),
             "idle": delta.total_seconds() if delta is not None else None,
             "items": sum(tracker_data.get_player_inventory_counts(team, player).values()),
-            "logic": hasattr(world_of(games[(team, player)]), "tracker_logic"),
+            "logic": has_logic(world_of(games[(team, player)])),
         })
     # Aktive zuerst, dann nach Fortschritt
     cards.sort(key=lambda c: (c["status_class"] == "goal", c["idle"] is None, -c["pct"], natural_key(c["name"])))

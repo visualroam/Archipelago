@@ -61,6 +61,9 @@
                         <div class="progress thin"><div style="width: {{ c.pct }}%"></div></div>
                     </div>
                 {% endfor %}
+                {% if checkable and logic.goal.ok and status_class != "goal" %}
+                    <button type="button" class="check-only goal-btn" data-goal="1">Ziel geschafft melden</button>
+                {% endif %}
             </div>
         {% endif %}
 
@@ -83,6 +86,12 @@
         <div class="section"><h2 class="hl">Checks</h2>
             <p>{% if logic %}Blau ist jetzt spielbar, 🔒 braucht noch Items.{% else %}Alle Checks dieses Slots, nach Gebiet sortiert.{% endif %}</p></div>
         <div class="box checks-box" id="checks">
+            {% if checkable %}
+                <div class="check-only checkmode">
+                    <span><b>Abhak-Modus</b> – du kannst hier Checks abhaken. Das geht nicht rückgängig, also nur, was wirklich geschafft ist.</span>
+                    <button type="button" class="link" id="check-logout">Beenden</button>
+                </div>
+            {% endif %}
             <div class="toolbar">
                 <div class="seg" role="group" aria-label="Filter">
                     <button type="button" data-filter="open" class="active">Offen</button>
@@ -102,12 +111,17 @@
                     </summary>
                     <ul class="rows">
                         {% for r in sec.rows %}
-                            <li class="st-{{ r.state }}" data-state="{{ r.state }}">
+                            <li class="st-{{ r.state }}" data-state="{{ r.state }}" data-id="{{ r.id }}">
                                 <span class="ico">{% if r.state == "done" %}✓{% elif r.state == "logic" %}●{% elif r.state == "locked" %}🔒{% else %}○{% endif %}</span>
                                 <span class="nm" title="{{ r.name }}">{{ r.label }}
                                     {% if r.missing %}<span class="sub">fehlt: {{ r.missing|join(" · ") }}</span>{% endif %}
                                     {% if r.hint %}<span class="sub hint">💡 Hinweis: {{ r.hint }}</span>{% endif %}
+                                    <span class="sub pending-note">wird übertragen … (bis zu 1 Minute)</span>
                                 </span>
+                                {% if checkable and r.state != "done" %}
+                                    <button type="button" class="check-only chk {% if r.state == 'locked' %}chk-locked{% endif %}"
+                                            data-id="{{ r.id }}" data-name="{{ r.name }}">Abhaken</button>
+                                {% endif %}
                             </li>
                         {% endfor %}
                     </ul>
@@ -225,8 +239,80 @@
             sec.open = q ? true : key in state.open ? state.open[key] : sec.dataset.default === "open";
         });
         document.getElementById("no-match")?.classList.toggle("hidden", any);
+        markPending();
         setTimeout(() => { applying = false; });
     };
+
+    // ─── Abhaken (geheimer Link …#check=<key>, nur AF-/Manual-Welten) ───
+    const CHECK_KEY = "af-check:" + location.pathname;
+    const PENDING_KEY = "af-pending:" + location.pathname;
+    const endpoint = location.pathname.replace(/\/$/, "") + "/check";
+    const store = {
+        get: (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (e) { return d; } },
+        set: (k, v) => { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} },
+    };
+    const fromHash = location.hash.match(/check=([0-9a-f]+)/);
+    if (fromHash) {
+        store.set(CHECK_KEY, fromHash[1]);
+        history.replaceState(null, "", location.pathname + location.search);  // Schlüssel nicht in der Adresszeile lassen
+    }
+    let checkKey = store.get(CHECK_KEY, null);
+
+    function markPending() {
+        const pending = store.get(PENDING_KEY, {});
+        const now = Date.now();
+        let changed = false;
+        for (const [id, ts] of Object.entries(pending)) {
+            const li = document.querySelector(`#checks li[data-id="${id}"]`);
+            if (!li || li.dataset.state === "done" || now - ts > 15 * 60_000) { delete pending[id]; changed = true; continue; }
+            li.classList.add("st-pending");
+            li.querySelector(".ico").textContent = "⏳";
+        }
+        if (changed) store.set(PENDING_KEY, pending);
+    }
+
+    async function send(body) {
+        const res = await fetch(endpoint, {
+            method: "POST", headers: { "content-type": "application/json" },
+            body: JSON.stringify({ key: checkKey, ...body }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok) throw new Error(data.error || `Fehler ${res.status}`);
+        return data;
+    }
+
+    if (checkKey) {
+        fetch(`${endpoint}?key=${encodeURIComponent(checkKey)}`).then(r => r.json()).then(d => {
+            if (d.ok) document.body.classList.add("can-check");
+            else { store.set(CHECK_KEY, null); checkKey = null; }
+        }).catch(() => {});
+    }
+
+    document.addEventListener("click", async e => {
+        if (e.target.id === "check-logout") {
+            store.set(CHECK_KEY, null); checkKey = null; document.body.classList.remove("can-check");
+            return;
+        }
+        const btn = e.target.closest(".chk, .goal-btn");
+        if (!btn || !checkKey) return;
+        const isGoal = !!btn.dataset.goal;
+        const question = isGoal
+            ? "Ziel als geschafft melden? Danach ist der Slot fertig (geht nicht rückgängig)."
+            : `„${btn.dataset.name}“ abhaken?${btn.classList.contains("chk-locked") ? "\n\nAchtung: laut Logik noch gesperrt." : ""}\n\nDas geht nicht rückgängig.`;
+        if (!confirm(question)) return;
+        btn.disabled = true;
+        try {
+            await send(isGoal ? { goal: true } : { location: Number(btn.dataset.id) });
+            if (isGoal) { btn.textContent = "Gemeldet ✓ (Seite aktualisiert sich gleich)"; return; }
+            const pending = store.get(PENDING_KEY, {});
+            pending[btn.dataset.id] = Date.now();
+            store.set(PENDING_KEY, pending);
+            markPending();
+        } catch (err) {
+            btn.disabled = false;
+            alert("Hat nicht geklappt: " + err.message);
+        }
+    });
 
     document.addEventListener("click", e => {
         const b = e.target.closest("#checks .seg button");

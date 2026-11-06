@@ -2517,6 +2517,26 @@ class ServerCommandProcessor(CommonCommandProcessor):
         self.ctx.broadcast_text_all(f"DeathLink: {self.ctx.get_aliased_name(team, slot)} – {cause_text}")
         return True
 
+    def _cmd_goal(self, player_name: str) -> bool:
+        """AF Charity: Ziel eines Slots als erreicht markieren – für Welten ohne Client (Manual/AF),
+        die ihr Ziel sonst nie melden. Löst wie ein echter Client Goal-Nachricht, Auto-Collect/-Release aus.
+        Usage: /goal <player>"""
+        resolved = self.resolve_player(player_name)
+        if not resolved:
+            self.output(f"Unknown or ambiguous player: {player_name}")
+            return False
+        team, slot, name = resolved
+        if self.ctx.client_game_state[team, slot] == ClientStatus.CLIENT_GOAL:
+            self.output(f"{name} has already completed their goal")
+            return True
+
+        class _Slot:  # update_client_status braucht nur team/slot, kein verbundener Client nötig
+            pass
+        target = _Slot()
+        target.team, target.slot = team, slot
+        update_client_status(self.ctx, target, ClientStatus.CLIENT_GOAL)
+        return True
+
     def _cmd_send_multiple(self, amount: typing.Union[int, str], player_name: str, *item_name: str) -> bool:
         """Sends multiples of an item to the specified player"""
         seeked_player, usable, response = get_intended_text(player_name, self.ctx.player_names.values())

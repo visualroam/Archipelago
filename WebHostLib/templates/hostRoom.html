@@ -44,6 +44,35 @@
             {% endif %}
         </span>
         {{ macros.list_patches_room(room) }}
+        {# AF: geheime Abhak-Links für Welten ohne Client – nur der Raum-Besitzer sieht sie #}
+        {% if room.owner == session["_id"] %}
+            {% set af_links = af_check_links(room) %}
+            {% if af_links %}
+                <div id="af-check-links">
+                    <h3>Abhak-Links</h3>
+                    <p>Mit diesem Link kann man im Tracker Checks abhaken und das Ziel melden. Nur an den jeweiligen
+                        Streamer bzw. die Mods geben – wer den Link hat, kann für diesen Slot abhaken.</p>
+                    <table>
+                        <thead><tr><th>Slot</th><th>Spiel</th><th>Link</th></tr></thead>
+                        <tbody>
+                        {% for l in af_links %}
+                            <tr>
+                                <td>{{ l.name }}</td>
+                                <td>{{ l.game }}</td>
+                                <td><button type="button" class="af-copy" data-url="{{ l.url }}">Link kopieren</button></td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <script>
+                    document.querySelectorAll(".af-copy").forEach(b => b.addEventListener("click", async () => {
+                        try { await navigator.clipboard.writeText(b.dataset.url); b.textContent = "Kopiert ✓"; }
+                        catch (e) { prompt("Link kopieren:", b.dataset.url); }
+                    }));
+                </script>
+            {% endif %}
+        {% endif %}
         {% if room.owner == session["_id"] %}
             <div style="display: flex; align-items: center;">
                 <form method="post" id="command-form" style="flex-grow: 1; margin-right: 1em;">
