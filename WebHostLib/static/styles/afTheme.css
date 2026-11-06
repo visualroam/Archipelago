@@ -234,6 +234,9 @@ details summary { cursor: pointer; }
 #host-room table th, #user-content table th, #check-result table th { color: var(--muted) !important; }
 #host-room #host-room-info { display: block; color: var(--muted); line-height: 1.7; }
 #host-room #host-room-info a, #host-room a { color: var(--yellow) !important; }
+/* Buttons sind gelb – Schrift dunkel, sonst gelb auf gelb */
+#host-room a.button, #host-room a.af-btn { color: var(--ink) !important; }
+#host-room a.button:hover, #host-room a.af-btn:hover { color: var(--ink) !important; }
 #host-room .interactive { color: var(--cyan) !important; font-weight: 600; }
 #host-room #logger {
     background: #0b0b0b !important; color: #d8d8d8 !important; border: 2px solid var(--track) !important; border-radius: 10px !important;
@@ -366,5 +369,5 @@ a.af-card:hover .go i { transform: translateX(4px); }
 #af-check-links button { padding: 7px 12px !important; font-size: 13px !important; }
 #af-admin-link { margin-top: 28px; padding-top: 22px; border-top: 2px solid var(--track); }
 #af-admin-link p { color: var(--muted); font-size: 14px; line-height: 1.6; margin: 6px 0 14px; }
-#af-admin-link a.button { margin-right: 12px !important; }
+#af-admin-link a.button { margin-right: 12px !important; padding: 7px 12px !important; font-size: 13px !important; }
 #af-admin-link button { padding: 7px 12px !important; font-size: 13px !important; }
