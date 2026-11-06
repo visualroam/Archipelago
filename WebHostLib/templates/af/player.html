@@ -113,9 +113,11 @@
                         {% for r in sec.rows %}
                             <li class="st-{{ r.state }}" data-state="{{ r.state }}" data-id="{{ r.id }}">
                                 <span class="ico">{% if r.state == "done" %}✓{% elif r.state == "logic" %}●{% elif r.state == "locked" %}🔒{% else %}○{% endif %}</span>
-                                <span class="nm" title="{{ r.name }}">{{ r.label }}
+                                <span class="nm" title="{{ r.name }}"><span class="lbl">{{ r.label }}</span>
                                     {% if r.missing %}<span class="sub">fehlt: {{ r.missing|join(" · ") }}</span>{% endif %}
                                     {% if r.hint %}<span class="sub hint">💡 Hinweis: {{ r.hint }}</span>{% endif %}
+                                    {% if r.found %}<span class="sub found">gefunden: <b class="kind-{{ r.found.kind }}">{{ r.found.item }}</b> →
+                                        {% if r.found.to_slot %}<a href="{{ url_for("get_player_tracker", tracker=room.tracker, tracked_team=team, tracked_player=r.found.to_slot) }}">{{ r.found.to }}</a>{% else %}{{ r.found.to }}{% endif %}</span>{% endif %}
                                     <span class="sub pending-note">wird übertragen … (bis zu 1 Minute)</span>
                                 </span>
                                 {% if checkable and r.state != "done" %}
@@ -134,17 +136,26 @@
     </div>
 
     <aside class="side">
-        <div class="section"><h2 class="hl">Zuletzt erhalten</h2></div>
+        <div class="section"><h2 class="hl">Erhalten</h2><p>Wer {{ player_name }} welches Item geschickt hat – neueste zuerst.</p></div>
         <div class="box">
             {% if recent %}
+                {% macro feed_item(r) %}
+                    <li>
+                        <div class="it kind-{{ r.kind }}"><span class="num">#{{ r.n }}</span> {{ r.name }}</div>
+                        <div class="from">{% if r.self %}selbst gefunden{% elif r.from_slot %}von <a href="{{ url_for("get_player_tracker", tracker=room.tracker, tracked_team=team, tracked_player=r.from_slot) }}">{{ r.from }}</a>{% else %}von {{ r.from }}{% endif %}{% if r.location %} · {{ r.location }}{% endif %}</div>
+                    </li>
+                {% endmacro %}
                 <ul class="feed">
-                    {% for r in recent %}
-                        <li>
-                            <div class="it kind-{{ r.kind }}">{{ r.name }}</div>
-                            <div class="from">{% if r.self %}selbst gefunden{% else %}von {{ r.from }}{% endif %}{% if r.location %} · {{ r.location }}{% endif %}</div>
-                        </li>
-                    {% endfor %}
+                    {% for r in recent[:12] %}{{ feed_item(r) }}{% endfor %}
                 </ul>
+                {% if recent|length > 12 %}
+                    <details class="more">
+                        <summary>Alle {{ recent|length }} anzeigen</summary>
+                        <ul class="feed">
+                            {% for r in recent[12:] %}{{ feed_item(r) }}{% endfor %}
+                        </ul>
+                    </details>
+                {% endif %}
             {% else %}
                 <div class="empty">Noch keine Items erhalten.</div>
             {% endif %}
@@ -157,7 +168,7 @@
                 <div class="inv-wrap">
                     <ul class="inv">
                         {% for i in items %}
-                            <li><span class="kind-{{ i.kind }}">{{ i.name }}{% if i.start %}<span class="start">Start</span>{% endif %}</span><span class="c">×{{ i.count }}</span></li>
+                            <li><span><span class="kind-{{ i.kind }}">{{ i.name }}</span>{% if i.from %}<span class="src">{{ i.from }}</span>{% endif %}</span><span class="c">×{{ i.count }}</span></li>
                         {% endfor %}
                     </ul>
                 </div>
@@ -239,6 +250,7 @@
             sec.open = q ? true : key in state.open ? state.open[key] : sec.dataset.default === "open";
         });
         document.getElementById("no-match")?.classList.toggle("hidden", any);
+        document.querySelectorAll("details.more").forEach(d => { d.open = !!state.moreOpen; });
         markPending();
         setTimeout(() => { applying = false; });
     };
@@ -325,6 +337,7 @@
     });
     document.addEventListener("toggle", e => {
         const sec = e.target;
+        if (!applying && sec.matches?.("details.more")) { state.moreOpen = sec.open; save(); return; }
         if (applying || !sec.matches?.("#checks details.sec") || state.search) return;
         state.open[sec.dataset.key] = sec.open; save();
     }, true);

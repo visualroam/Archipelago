@@ -586,15 +586,26 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
     received: List[NetworkItem] = list(tracker_data.get_player_received_items(team, player))
     starting = tracker_data.get_player_starting_inventory(player)
     item_info: Dict[str, Dict[str, Any]] = {}
+    def sender_label(net_item: NetworkItem) -> str:
+        if not net_item.player:
+            return "per Spende/Admin"
+        if net_item.player == player:
+            return "selbst gefunden"
+        return "von " + names.get((team, net_item.player), "Server")
+
     for item_id in starting:
         name = item_names[game][item_id]
-        info = item_info.setdefault(name, {"name": name, "count": 0, "kind": "filler", "order": -1, "start": True})
+        info = item_info.setdefault(name, {"name": name, "count": 0, "kind": "filler", "order": -1, "start": True,
+                                           "sources": collections.Counter()})
         info["count"] += 1
+        info["sources"]["Start-Item"] += 1
     for order, net_item in enumerate(received):
         name = item_names[game][net_item.item]
-        info = item_info.setdefault(name, {"name": name, "count": 0, "kind": "filler", "order": order, "start": False})
+        info = item_info.setdefault(name, {"name": name, "count": 0, "kind": "filler", "order": order, "start": False,
+                                           "sources": collections.Counter()})
         info["count"] += 1
         info["order"] = order
+        info["sources"][sender_label(net_item)] += 1
         kind = item_kind(net_item.flags)
         if kind != "filler":
             info["kind"] = kind
@@ -604,14 +615,21 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
                 info["kind"] = "prog"
     kind_rank = {"prog": 0, "useful": 1, "filler": 2, "trap": 3}
     items = sorted(item_info.values(), key=lambda i: (kind_rank[i["kind"]], natural_key(i["name"])))
+    for info in items:  # „von menniphi, eybutti (2×) · Start-Item“
+        label = lambda who, n: f"{who} ({n}×)" if n > 1 else who
+        senders = [label(who[4:], n) for who, n in info["sources"].most_common() if who.startswith("von ")]
+        others = [label(who, n) for who, n in info["sources"].most_common() if not who.startswith("von ")]
+        info["from"] = " · ".join((["von " + ", ".join(senders)] if senders else []) + others)
 
     recent = []
-    for net_item in reversed(received[-12:]):
+    for index, net_item in reversed(list(enumerate(received))):
         sender_game = games.get((team, net_item.player), game)
         recent.append({
+            "n": index + 1,
             "name": item_names[game][net_item.item],
             "kind": item_kind(net_item.flags),
-            "from": names.get((team, net_item.player), "Server") if net_item.player else "Server",
+            "from": names.get((team, net_item.player), "Server") if net_item.player else "Spende/Admin (Server)",
+            "from_slot": net_item.player if net_item.player and net_item.player != player else None,
             "self": net_item.player == player,
             "location": location_names[sender_game][net_item.location] if net_item.location > 0 else None,
         })
@@ -647,6 +665,17 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
     checked_ids = tracker_data.get_player_checked_locations(team, player)
     logic = build_logic(game, tracker_data.get_slot_data(player), inventory)
 
+    def found_at(location_id: int) -> Optional[Dict[str, Any]]:
+        """Was an einer (erledigten) Location lag und wer es bekommen hat – kein Spoiler, ist ja schon gefunden."""
+        meta = location_ids.get(location_id)
+        if not meta:
+            return None
+        item_id, receiver, flags = meta[0], meta[1], meta[2]
+        receiver_game = games.get((team, receiver), game)
+        return {"item": item_names[receiver_game][item_id], "kind": item_kind(flags),
+                "to": "selbst" if receiver == player else names.get((team, receiver), "?"),
+                "to_slot": receiver if receiver != player else None}
+
     rows = []
     for location_id in location_ids:
         name = location_names[game][location_id]
@@ -656,6 +685,7 @@ def render_af_player_tracker(tracker_data, team: int, player: int) -> str:
             ok, missing = evaluate(logic["rules"].get(name), inventory)
             state = "logic" if ok else "locked"
         rows.append({"id": location_id, "name": name, "label": name, "state": state, "missing": missing,
+                     "found": found_at(location_id) if done else None,
                      "hint": hinted_here.get(name)})
 
     if logic:

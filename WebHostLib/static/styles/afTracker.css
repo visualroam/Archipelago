@@ -222,7 +222,8 @@ ul.rows li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10p
 ul.rows li:first-child { border-top: 0; }
 ul.rows li:hover { background: #171717; }
 .ico { text-align: center; font-weight: 700; }
-.st-done .ico { color: var(--green); } .st-done .nm { color: var(--dim); text-decoration: line-through; text-decoration-color: var(--track); }
+.st-done .ico { color: var(--green); } .st-done .nm { color: var(--dim); }
+.st-done .lbl { text-decoration: line-through; text-decoration-color: var(--track); }
 .st-logic .ico { color: var(--cyan); } .st-logic .nm { font-weight: 600; }
 .st-locked .ico { color: var(--dim); } .st-locked .nm { color: var(--muted); }
 .st-open .ico { color: var(--yellow); }
@@ -297,3 +298,16 @@ body.can-check .checkmode { display: flex !important; }
   background: var(--yellow); color: var(--ink); font-weight: 700; font-size: 14px; box-shadow: 4px 4px 0 var(--red);
 }
 body.can-check .goal-btn { display: inline-flex !important; }
+
+/* Herkunft: wer hat was geschickt, was lag wo */
+.feed .num { font-family: var(--display); font-size: 15px; color: var(--dim); margin-right: 4px; font-weight: 400; }
+.feed .from a, .sub.found a { color: var(--white); font-weight: 600; text-decoration: underline; text-decoration-color: var(--track); }
+.feed .from a:hover, .sub.found a:hover { color: var(--yellow); }
+.inv .src { display: block; font-size: 11px; color: var(--dim); line-height: 1.35; margin-top: 1px; }
+.sub.found { color: var(--muted); }
+details.more { margin-top: 6px; border-top: 2px solid var(--track); }
+details.more > summary { cursor: pointer; padding: 12px 0 4px; font-weight: 700; font-size: 13px; color: var(--yellow); list-style: none; }
+details.more > summary::-webkit-details-marker { display: none; }
+details.more > summary::before { content: "▸ "; }
+details.more[open] > summary::before { content: "▾ "; }
+details.more .feed li:first-child { border-top: 2px solid var(--track); padding-top: 12px; }
