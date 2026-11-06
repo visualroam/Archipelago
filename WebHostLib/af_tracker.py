@@ -761,6 +761,7 @@ def admin_overview(tracker_data, team: int = 0) -> Dict[str, Any]:
         "edges_now": edges_now,
         "spheres": [{"index": i, "done": d, "total": t} for i, (d, t) in sorted(spheres.items())],
         "bottleneck": [e for e in open_prog if frontier is not None and e["sphere"] <= frontier + 1][:60],
+        "open_prog": open_prog,  # alle offenen wichtigen Checks – die Seite filtert nach Sphere / bei / für
     }
 
 

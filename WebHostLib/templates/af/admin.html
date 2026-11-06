@@ -38,6 +38,14 @@ table.hang td.s { font-family: var(--display); font-size: 20px; color: var(--cya
 table.hang a { color: var(--white); font-weight: 600; }
 table.hang a:hover { color: var(--yellow); }
 .hang-wrap { overflow-x: auto; padding: 4px 6px 10px; }
+.hang-filter { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; padding: 16px 16px 12px; border-bottom: 2px solid var(--track); }
+.hang-filter label { display: grid; gap: 4px; font-size: 11px; font-weight: 600; letter-spacing: 1px; text-transform: uppercase; color: var(--muted); }
+.hang-filter select { min-width: 170px; background: var(--ink); color: var(--white); border: 2px solid var(--track); border-radius: 8px; padding: 7px 10px; font: 600 13px Poppins, sans-serif; }
+.hang-filter select:focus { outline: none; border-color: var(--yellow); }
+.hang-filter .count { font-size: 13px; color: var(--muted); margin-left: auto; padding-bottom: 8px; }
+.hang-filter .count b { color: var(--yellow); }
+.hang-filter .reset { background: none; border: 0; color: var(--yellow); font: 700 12px Poppins, sans-serif; cursor: pointer; padding: 0 0 9px; text-decoration: underline; }
+.hang-more { padding: 10px 16px 16px; font-size: 12px; color: var(--muted); }
 .cards { display: grid; gap: 30px 24px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
 .scard2 { padding: 22px 18px 16px; display: grid; gap: 10px; }
 .scard2 .top { display: flex; align-items: center; gap: 12px; }
@@ -121,6 +129,69 @@ table.hang button:disabled, .acts button:disabled { opacity: .4; }
 
     let graphMode = "now";
     let selected = null;   // gewählte Sphere-Kachel {slot, sphere}
+    const hangFilter = { sphere: "front", holder: "", receiver: "" };   // „Wo es hängt“-Filter
+
+    function renderHang() {
+        const box = document.getElementById("hang-box");
+        if (!box || !data) return;
+        const all = data.open_prog || [], front = data.room.frontier;
+        if (!all.length) { box.innerHTML = `<div class="empty" style="margin:18px">Nichts offen – alles Wichtige ist gefunden. 🎉</div>`; return; }
+        const count = (list, key) => list.reduce((m, e) => (m[e[key]] = (m[e[key]] || 0) + 1, m), {});
+        const bySphere = count(all, "sphere"), byHolder = count(all, "slot"), byReceiver = count(all, "receiver");
+        const nameOf = {};
+        data.slots.forEach(s => { nameOf[s.player] = s.name; });
+        all.forEach(e => { nameOf[e.slot] ??= e.slot_name; if (e.receiver !== e.slot) nameOf[e.receiver] ??= e.receiver_name; });
+        const byName = ids => ids.sort((a, b) => String(nameOf[a]).localeCompare(String(nameOf[b]), "de"));
+
+        const rows = all.filter(e =>
+            (hangFilter.sphere === "all" || (hangFilter.sphere === "front" ? front !== null && e.sphere <= front + 1 : e.sphere === Number(hangFilter.sphere)))
+            && (!hangFilter.holder || e.slot === Number(hangFilter.holder))
+            && (!hangFilter.receiver || e.receiver === Number(hangFilter.receiver)));
+        const LIMIT = 300;
+        const opt = (value, label, current) => `<option value="${value}" ${String(current) === String(value) ? "selected" : ""}>${esc(label)}</option>`;
+        const frontCount = all.filter(e => front !== null && e.sphere <= front + 1).length;
+
+        box.innerHTML = `
+            <div class="hang-filter">
+                <label>Sphere<select data-hang="sphere">
+                    ${opt("front", `Früheste offene (${front === null ? "–" : front + 1}–${front === null ? "–" : front + 2}) · ${frontCount}`, hangFilter.sphere)}
+                    ${opt("all", `Alle · ${all.length}`, hangFilter.sphere)}
+                    ${Object.keys(bySphere).map(Number).sort((a, b) => a - b).map(i => opt(i, `Sphere ${i + 1} · ${bySphere[i]}`, hangFilter.sphere)).join("")}
+                </select></label>
+                <label>Bei (muss den Check machen)<select data-hang="holder">
+                    ${opt("", "Alle Streamer", hangFilter.holder)}
+                    ${byName(Object.keys(byHolder).map(Number)).map(p => opt(p, `${nameOf[p]} · ${byHolder[p]}`, hangFilter.holder)).join("")}
+                </select></label>
+                <label>Für (bekommt das Item)<select data-hang="receiver">
+                    ${opt("", "Alle Streamer", hangFilter.receiver)}
+                    ${byName(Object.keys(byReceiver).map(Number)).map(p => opt(p, `${nameOf[p]} · ${byReceiver[p]}`, hangFilter.receiver)).join("")}
+                </select></label>
+                ${hangFilter.sphere !== "front" || hangFilter.holder || hangFilter.receiver ? `<button type="button" class="reset" data-hang-reset="1">Filter zurücksetzen</button>` : ""}
+                <span class="count"><b>${rows.length}</b> von ${all.length} offenen wichtigen Checks</span>
+            </div>
+            ${rows.length ? `<div class="hang-wrap"><table class="hang"><thead><tr><th>Sphere</th><th>Bei</th><th>Check</th><th>Item → für</th><th></th></tr></thead><tbody>
+                ${rows.slice(0, LIMIT).map(e => `
+                <tr><td class="s">${e.sphere + 1}</td>
+                    <td><a href="${slotUrl(e.slot)}">${esc(e.slot_name)}</a></td>
+                    <td>${esc(e.location)}</td>
+                    <td><b class="kind-prog">${esc(e.item)}</b> → ${e.receiver === e.slot ? "selbst" : `<a href="${slotUrl(e.receiver)}">${esc(e.receiver_name)}</a>`}</td>
+                    <td><button type="button" data-check="${e.slot}:${e.location_id}" data-name="${esc(e.location)}" data-slot-name="${esc(e.slot_name)}">Abhaken</button></td></tr>`).join("")}
+                </tbody></table></div>
+                ${rows.length > LIMIT ? `<div class="hang-more">Zeige die ersten ${LIMIT} von ${rows.length} – Filter enger stellen für den Rest.</div>` : ""}`
+              : `<div class="empty" style="margin:18px">Für diese Filter ist nichts offen.</div>`}`;
+    }
+
+    document.addEventListener("change", e => {
+        const sel = e.target.closest("[data-hang]");
+        if (!sel) return;
+        hangFilter[sel.dataset.hang] = sel.value;
+        renderHang();
+    });
+    document.addEventListener("click", e => {
+        if (!e.target.closest("[data-hang-reset]")) return;
+        Object.assign(hangFilter, { sphere: "front", holder: "", receiver: "" });
+        renderHang();
+    });
     function graph(d) {
         const edgeList = graphMode === "now" ? d.edges_now : d.edges;
         const slots = d.slots.slice().sort((a, b) => a.name.localeCompare(b.name, "de"));
@@ -172,12 +243,6 @@ table.hang button:disabled, .acts button:disabled { opacity: .4; }
             <div class="col ${s.index === r.frontier ? "front" : ""}" title="Sphere ${s.index + 1}: ${s.done}/${s.total}">
                 <div class="bar" style="height:${Math.max(4, 100 * s.total / maxSphere)}%"><div style="height:${s.total ? 100 * s.done / s.total : 0}%"></div></div>
                 <span class="lbl">${s.index + 1}</span></div>`).join("");
-        const hang = d.bottleneck.map(e => `
-            <tr><td class="s">${e.sphere + 1}</td>
-                <td><a href="${slotUrl(e.slot)}">${esc(e.slot_name)}</a></td>
-                <td>${esc(e.location)}</td>
-                <td><b class="kind-prog">${esc(e.item)}</b> → ${e.receiver === e.slot ? "selbst" : `<a href="${slotUrl(e.receiver)}">${esc(e.receiver_name)}</a>`}</td>
-                <td><button type="button" data-check="${e.slot}:${e.location_id}" data-name="${esc(e.location)}" data-slot-name="${esc(e.slot_name)}">Abhaken</button></td></tr>`).join("");
         const cards = d.slots.slice().sort((a, b) => b.holding - a.holding || a.name.localeCompare(b.name, "de")).map(s => {
             const flags = [];
             if (s.status_class === "goal") flags.push(`<span class="flag good">Ziel erreicht</span>`);
@@ -253,11 +318,13 @@ table.hang button:disabled, .acts button:disabled { opacity: .4; }
                 <div class="sphere-note">Solange frühe Spheres offen sind, kommen spätere Items nicht frei – dort lohnt sich Druck am meisten.</div></div>
 
             <div class="section"><h2 class="hl">Wo es hängt</h2>
-                <p>Offene Checks mit wichtigen Items aus den frühesten offenen Spheres. Wer die macht, schaltet andere frei.</p></div>
-            <div class="box" style="padding:0">${hang ? `<div class="hang-wrap"><table class="hang"><thead><tr><th>Sphere</th><th>Bei</th><th>Check</th><th>Item → für</th><th></th></tr></thead><tbody>${hang}</tbody></table></div>` : `<div class="empty" style="margin:18px">Nichts offen – alles Wichtige ist gefunden. 🎉</div>`}</div>
+                <p>Offene Checks mit wichtigen Items. Standard: die frühesten offenen Spheres – wer die macht, schaltet andere frei. Mit den Filtern nach Sphere, „bei wem“ und „für wen“ eingrenzen.</p></div>
+            <div class="box" style="padding:0" id="hang-box"></div>
 
             <div class="section"><h2 class="hl">Streamer</h2><p>Sortiert nach: wer hält am meisten für andere fest.</p></div>
             <div class="cards">${cards}</div>`;
+
+        renderHang();
 
         // Graph: Hover zeigt nur die Pfeile eines Streamers
         document.querySelectorAll(".graph-box .node").forEach(nd => {
