@@ -1,0 +1,250 @@
+{% extends "af/base.html" %}
+{% block title %}{{ player_name }}{% endblock %}
+{% set tag_class = {"on": "live", "goal": "goal", "off": "dark"}[status_class] %}
+
+{% block body %}
+<div class="topnav">
+    <a class="back" href="{{ url_for("get_multiworld_tracker", tracker=room.tracker) }}">← Alle Slots</a>
+    <select class="slotsel" aria-label="Slot wechseln" onchange="location.href=this.value">
+        {% for s in slots %}
+            <option value="{{ url_for("get_player_tracker", tracker=room.tracker, tracked_team=s.team, tracked_player=s.player) }}"
+                    {% if s.player == player and s.team == team %}selected{% endif %}>{{ s.name }} · {{ s.game }}</option>
+        {% endfor %}
+    </select>
+</div>
+
+<section class="box profile">
+    <span class="ribbon">Archipelago · Slot {{ player }}</span>
+    <span class="tag tr {{ tag_class }}">{{ status_text }}</span>
+    {% if cover %}<img class="cover" src="{{ cover }}" alt="">{% else %}<div class="cover none" aria-hidden="true">?</div>{% endif %}
+    <div class="who">
+        <h1 class="big">{{ player_name }}</h1>
+        <div class="game"><div class="label">Spielt</div><b>{{ game }}</b></div>
+        <div class="meta">{% if last_activity %}Zuletzt aktiv {{ last_activity }}{% else %}Noch nie verbunden{% endif %}</div>
+    </div>
+    <div class="money">
+        <div class="label">Checks</div>
+        <div class="big yellow">{{ checks_done }} <small>/ {{ checks_total }}</small></div>
+        <div class="progress"><div style="width: {{ pct }}%"></div></div>
+        <div class="muted" style="font-size: 13px;">{{ pct }}% geschafft</div>
+    </div>
+</section>
+
+<div class="stats">
+    {% if logic %}
+        <div class="box stat cyan"><div class="big">{{ counts.logic }}</div><div class="label">Jetzt spielbar</div></div>
+        <div class="box stat"><div class="big">{{ counts.locked }}</div><div class="label">Gesperrt</div></div>
+    {% else %}
+        <div class="box stat"><div class="big">{{ checks_total - checks_done }}</div><div class="label">Checks offen</div></div>
+    {% endif %}
+    <div class="box stat yellow"><div class="big">{{ items_total }}</div><div class="label">Items erhalten</div></div>
+    <div class="box stat"><div class="big">{{ looking_for|length + to_find|length }}</div><div class="label">Offene Hinweise</div></div>
+</div>
+
+<div class="layout">
+    <div>
+        {% if logic and logic.goal %}
+            <div class="section"><h2 class="hl">Ziel</h2><p>Das muss {{ player_name }} schaffen, damit der Slot fertig ist.</p></div>
+            <div class="box goalbox">
+                <div class="big gname">{{ logic.goal.name }}</div>
+                {% if status_class == "goal" %}
+                    <div class="state ok">Geschafft! 🎉</div>
+                {% elif logic.goal.ok %}
+                    <div class="state ok">Alles beisammen – das Finale ist jetzt spielbar.</div>
+                {% else %}
+                    <div class="state">Fehlt noch:</div>
+                    <div class="missing">{% for m in logic.goal.missing %}<span>{{ m }}</span>{% endfor %}</div>
+                {% endif %}
+                {% for c in logic.counters %}
+                    <div class="counter">
+                        <div class="row"><b>{{ c.item }}</b><span><span class="big">{{ c.have }}</span> / {{ c.required }}</span></div>
+                        <div class="progress thin"><div style="width: {{ c.pct }}%"></div></div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        {% if logic and logic.groups %}
+            <div class="section"><h2 class="hl">Freischaltungen</h2><p>Gelb ist schon da – alles andere muss erst gefunden werden.</p></div>
+            <div class="box unlocks">
+                {% for g in logic.groups %}
+                    <div>
+                        <div class="label">{{ g.title }} · {{ g.owned }}/{{ g.total }}</div>
+                        <div class="ugrid">
+                            {% for i in g["items"] %}
+                                <span class="unlock {% if i.owned %}owned{% elif i.next %}next{% endif %}">{{ i.name.split(": ", 1)[-1] }}</span>
+                            {% endfor %}
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+        {% endif %}
+
+        <div class="section"><h2 class="hl">Checks</h2>
+            <p>{% if logic %}Blau ist jetzt spielbar, 🔒 braucht noch Items.{% else %}Alle Checks dieses Slots, nach Gebiet sortiert.{% endif %}</p></div>
+        <div class="box checks-box" id="checks">
+            <div class="toolbar">
+                <div class="seg" role="group" aria-label="Filter">
+                    <button type="button" data-filter="open" class="active">Offen</button>
+                    {% if logic %}<button type="button" data-filter="logic">Spielbar</button>{% endif %}
+                    <button type="button" data-filter="done">Erledigt</button>
+                    <button type="button" data-filter="all">Alle</button>
+                </div>
+                <input class="search" type="search" placeholder="Check suchen …" aria-label="Check suchen">
+            </div>
+            {% for sec in sections %}
+                <details class="sec {% if sec.state %}state-{{ sec.state }}{% endif %}" data-key="{{ sec.title }}"
+                         data-default="{{ 'open' if sec.state in ('logic', 'locked') or sections|length <= 3 or sec.total <= 30 else '' }}">
+                    <summary>
+                        <span class="t">{{ sec.title }}</span>
+                        <span class="n">{% if sec.state %}{{ sec.total }}{% else %}{{ sec.done }}/{{ sec.total }}{% endif %}</span>
+                        {% if not sec.state %}<span class="progress thin"><div style="width: {{ (100 * sec.done / sec.total)|round|int if sec.total else 100 }}%"></div></span>{% endif %}
+                    </summary>
+                    <ul class="rows">
+                        {% for r in sec.rows %}
+                            <li class="st-{{ r.state }}" data-state="{{ r.state }}">
+                                <span class="ico">{% if r.state == "done" %}✓{% elif r.state == "logic" %}●{% elif r.state == "locked" %}🔒{% else %}○{% endif %}</span>
+                                <span class="nm" title="{{ r.name }}">{{ r.label }}
+                                    {% if r.missing %}<span class="sub">fehlt: {{ r.missing|join(" · ") }}</span>{% endif %}
+                                    {% if r.hint %}<span class="sub hint">💡 Hinweis: {{ r.hint }}</span>{% endif %}
+                                </span>
+                            </li>
+                        {% endfor %}
+                    </ul>
+                </details>
+            {% else %}
+                <div class="empty">Dieser Slot hat keine Checks.</div>
+            {% endfor %}
+            <div class="empty hidden" id="no-match">Nichts gefunden.</div>
+        </div>
+    </div>
+
+    <aside class="side">
+        <div class="section"><h2 class="hl">Zuletzt erhalten</h2></div>
+        <div class="box">
+            {% if recent %}
+                <ul class="feed">
+                    {% for r in recent %}
+                        <li>
+                            <div class="it kind-{{ r.kind }}">{{ r.name }}</div>
+                            <div class="from">{% if r.self %}selbst gefunden{% else %}von {{ r.from }}{% endif %}{% if r.location %} · {{ r.location }}{% endif %}</div>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <div class="empty">Noch keine Items erhalten.</div>
+            {% endif %}
+        </div>
+
+        <div class="section"><h2 class="hl">Inventar</h2><p>{{ items|length }} verschiedene Items</p></div>
+        <div class="box">
+            <div class="kinds"><span class="kind-prog">● wichtig</span><span class="kind-useful">● nützlich</span><span>● Füller</span><span class="kind-trap">● Trap</span></div>
+            {% if items %}
+                <div class="inv-wrap">
+                    <ul class="inv">
+                        {% for i in items %}
+                            <li><span class="kind-{{ i.kind }}">{{ i.name }}{% if i.start %}<span class="start">Start</span>{% endif %}</span><span class="c">×{{ i.count }}</span></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% else %}
+                <div class="empty">Leer.</div>
+            {% endif %}
+        </div>
+
+        <div class="section"><h2 class="hl">Hinweise</h2></div>
+        <div class="box">
+            {% if not (looking_for or to_find or found_hints) %}
+                <div class="empty">Noch keine Hinweise.</div>
+            {% endif %}
+            {% if looking_for %}
+                <div class="label subhead">Meine Items liegen bei …</div>
+                <ul class="hints">
+                    {% for h in looking_for %}
+                        <li><span class="kind-{{ h.kind }}" style="font-weight: 700;">{{ h.item }}</span>
+                            <div class="who">bei <a href="{{ url_for("get_player_tracker", tracker=room.tracker, tracked_team=team, tracked_player=h.finder_slot) }}">{{ h.finder }}</a> · {{ h.location }}{% if h.entrance %} ({{ h.entrance }}){% endif %}</div></li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+            {% if to_find %}
+                <div class="label subhead">Ich muss finden für …</div>
+                <ul class="hints">
+                    {% for h in to_find %}
+                        <li><span class="kind-{{ h.kind }}" style="font-weight: 700;">{{ h.item }}</span>
+                            <div class="who">für <a href="{{ url_for("get_player_tracker", tracker=room.tracker, tracked_team=team, tracked_player=h.receiver_slot) }}">{{ h.receiver }}</a> · {{ h.location }}{% if h.entrance %} ({{ h.entrance }}){% endif %}</div></li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+            {% if found_hints %}
+                <div class="label subhead">Schon gefunden</div>
+                <ul class="hints">
+                    {% for h in found_hints %}
+                        <li style="color: var(--dim);">{{ h.item }}<div class="who">{{ h.finder }} → {{ h.receiver }} · {{ h.location }}</div></li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+    </aside>
+</div>
+{% endblock %}
+
+{% block footlinks %}
+    <li><a href="{{ url_for("get_generic_game_tracker", tracker=room.tracker, tracked_team=team, tracked_player=player) }}">Klassischer Tracker</a></li>
+{% endblock %}
+
+{% block script %}
+<script>
+(() => {
+    const KEY = "af-tracker:" + location.pathname;
+    let state = { filter: "open", search: "", open: {} };
+    try { Object.assign(state, JSON.parse(sessionStorage.getItem(KEY) || "{}")); } catch (e) {}
+    if (!document.querySelector(`#checks .seg button[data-filter="${state.filter}"]`)) state.filter = "open";
+    const save = () => { try { sessionStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} };
+    let applying = false;
+
+    const apply = () => {
+        applying = true;
+        const q = state.search.trim().toLowerCase();
+        document.querySelectorAll("#checks .seg button").forEach(b => b.classList.toggle("active", b.dataset.filter === state.filter));
+        const input = document.querySelector("#checks .search");
+        if (input && input.value !== state.search) input.value = state.search;
+        let any = false;
+        document.querySelectorAll("#checks details.sec").forEach(sec => {
+            let visible = 0;
+            const secHit = !!q && sec.dataset.key.toLowerCase().includes(q);
+            sec.querySelectorAll("li[data-state]").forEach(li => {
+                const st = li.dataset.state;
+                const okFilter = state.filter === "all" || (state.filter === "done" ? st === "done" : state.filter === "logic" ? st === "logic" : st !== "done");
+                const show = okFilter && (!q || secHit || li.textContent.toLowerCase().includes(q));
+                li.classList.toggle("hidden", !show);
+                if (show) visible++;
+            });
+            sec.classList.toggle("hidden", visible === 0);
+            any = any || visible > 0;
+            const key = sec.dataset.key;
+            sec.open = q ? true : key in state.open ? state.open[key] : sec.dataset.default === "open";
+        });
+        document.getElementById("no-match")?.classList.toggle("hidden", any);
+        setTimeout(() => { applying = false; });
+    };
+
+    document.addEventListener("click", e => {
+        const b = e.target.closest("#checks .seg button");
+        if (!b) return;
+        state.filter = b.dataset.filter; save(); apply();
+    });
+    document.addEventListener("input", e => {
+        if (!e.target.matches("#checks .search")) return;
+        state.search = e.target.value; save(); apply();
+    });
+    document.addEventListener("toggle", e => {
+        const sec = e.target;
+        if (applying || !sec.matches?.("#checks details.sec") || state.search) return;
+        state.open[sec.dataset.key] = sec.open; save();
+    }, true);
+
+    window.afRestoreState = apply;
+    apply();
+})();
+</script>
+{% endblock %}

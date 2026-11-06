@@ -1,0 +1,80 @@
+{% extends "af/base.html" %}
+{% block title %}Alle Slots{% endblock %}
+
+{% block body %}
+<section class="box hero">
+    <span class="ribbon">Archipelago Multiworld</span>
+    <div class="cells">
+        <div class="logos">
+            <img class="af" src="{{ url_for("static", filename="static/af/af-logo.svg") }}" alt="Austrian Force">
+            <span class="fuer">für</span>
+            <img class="unicef" src="{{ url_for("static", filename="static/af/unicef-white.png") }}" alt="UNICEF">
+        </div>
+        <div class="cell">
+            <div class="label">Gemeinsamer Fortschritt</div>
+            <div class="big amount yellow">{{ pct }}%</div>
+            <div class="row"><b>{{ done }} / {{ total }} Checks</b><span class="muted">{{ cards|length }} Slots</span></div>
+            <div class="progress"><div style="width: {{ pct }}%"></div></div>
+            <div class="facts"><span><b>{{ online }}</b>gerade verbunden</span><span><b>{{ goals }}</b>Ziel erreicht</span></div>
+        </div>
+    </div>
+</section>
+
+<div class="section">
+    <h2 class="hl">Streamer</h2>
+    <p>Klick auf einen Streamer für Checks, Items und Hinweise.</p>
+</div>
+<input class="search" id="slot-search" type="search" placeholder="Streamer oder Spiel suchen …" aria-label="Slot suchen" style="margin-bottom: 38px;">
+
+<div class="grid">
+    {% for c in cards %}
+        {% set tag_class = {"on": "live", "goal": "goal", "off": "dark"}[c.status_class] %}
+        <a class="box scard {% if c.status_class == 'goal' %}done{% endif %}" data-q="{{ (c.name ~ ' ' ~ c.game)|lower }}"
+           href="{{ url_for("get_player_tracker", tracker=room.tracker, tracked_team=c.team, tracked_player=c.player) }}">
+            {% if c.status_class != "off" %}<span class="tag tr {{ tag_class }}">{{ c.status_text }}</span>{% endif %}
+            {% if c.cover %}
+                <div class="poster"><img src="{{ c.cover }}" alt="" loading="lazy"></div>
+            {% else %}
+                <div class="poster none"><span class="q">?</span></div>
+            {% endif %}
+            <div class="body">
+                <div class="big name">{{ c.name }}</div>
+                <div class="game"><span class="label">Spielt</span><span class="gname">{{ c.game }}</span></div>
+                <div>
+                    <div class="checks"><span><span class="big">{{ c.done }}</span> / {{ c.total }}</span><span>{{ c.pct }}%</span></div>
+                    <div class="progress thin"><div style="width: {{ c.pct }}%"></div></div>
+                </div>
+                <div class="foot">
+                    <span>{{ c.last_activity or "noch nie verbunden" }}{% if c.logic %} · <span class="badge">Logik</span>{% endif %}</span>
+                    <span class="cta">Tracker <i>→</i></span>
+                </div>
+            </div>
+        </a>
+    {% else %}
+        <div class="empty">Keine Slots in diesem Raum.</div>
+    {% endfor %}
+</div>
+{% endblock %}
+
+{% block footlinks %}
+    <li><a href="{{ url_for("get_multiworld_tracker", tracker=room.tracker, game="Generic") }}">Klassische Tabelle</a></li>
+    <li><a href="{{ url_for("get_multiworld_sphere_tracker", tracker=room.tracker) }}">Sphere-Tracker</a></li>
+{% endblock %}
+
+{% block script %}
+<script>
+(() => {
+    let q = "";
+    const apply = () => {
+        const input = document.getElementById("slot-search");
+        if (input && input.value !== q) input.value = q;
+        document.querySelectorAll("a.scard").forEach(a => a.classList.toggle("hidden", !!q && !a.dataset.q.includes(q)));
+    };
+    document.addEventListener("input", e => {
+        if (e.target.id !== "slot-search") return;
+        q = e.target.value.trim().toLowerCase(); apply();
+    });
+    window.afRestoreState = apply;
+})();
+</script>
+{% endblock %}

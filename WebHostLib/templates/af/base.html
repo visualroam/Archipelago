@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="de">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#111111">
+    <title>{% block title %}Tracker{% endblock %} · Austrian Force für UNICEF</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for("static", filename="static/af/af-logo.svg") }}">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Poppins:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for("static", filename="styles/afTracker.css") }}">
+</head>
+<body>
+<main id="live" class="wrap">{% block body %}{% endblock %}</main>
+
+<footer class="footer">
+    <span class="ribbon">Für jedes Kind</span>
+    <div class="wrap cols">
+        <div>
+            <a class="logos" href="{{ url_for("get_multiworld_tracker", tracker=room.tracker) }}" aria-label="Alle Slots">
+                <img class="af" src="{{ url_for("static", filename="static/af/af-logo.svg") }}" alt="Austrian Force">
+                <span class="fuer">für</span>
+                <img class="unicef" src="{{ url_for("static", filename="static/af/unicef-white.png") }}" alt="UNICEF – für jedes Kind">
+            </a>
+            <p class="about">Die Austrian Force streamt für UNICEF. Hier siehst du live, wie weit jeder Streamer in der Multiworld ist.</p>
+            <div class="live-note"><span class="live-dot"></span>Aktualisiert sich automatisch (der Server speichert etwa jede Minute).</div>
+        </div>
+        <nav aria-label="Links">
+            <h4 class="label">Tracker</h4>
+            <ul>
+                <li><a href="{{ url_for("get_multiworld_tracker", tracker=room.tracker) }}">Alle Slots</a></li>
+                {% block footlinks %}{% endblock %}
+                <li><a href="{{ url_for("host_room", room=room.id) }}">Raum</a></li>
+            </ul>
+        </nav>
+        <div class="cta">
+            <div class="big">Jetzt spenden und <span>Kindern in Not</span> helfen!</div>
+            <a class="btn" href="https://af-charity.xd0m3.at/" target="_blank" rel="noreferrer">Streamer wählen ↗</a>
+        </div>
+    </div>
+</footer>
+
+<script>
+// Inhalt regelmäßig neu laden, ohne Filter/Suche/aufgeklappte Abschnitte zu verlieren
+(() => {
+    const live = document.getElementById("live");
+    const refresh = async () => {
+        if (document.hidden) return;
+        try {
+            const res = await fetch(location.href, { cache: "no-store" });
+            if (!res.ok) return;
+            const next = new DOMParser().parseFromString(await res.text(), "text/html").getElementById("live");
+            if (!next) return;
+            const y = window.scrollY;
+            live.innerHTML = next.innerHTML;
+            window.afRestoreState?.();
+            window.scrollTo(0, y);
+        } catch (e) { /* nächster Versuch */ }
+    };
+    setInterval(refresh, 30000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refresh(); });
+})();
+</script>
+{% block script %}{% endblock %}
+</body>
+</html>

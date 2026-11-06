@@ -344,9 +344,10 @@ def get_timeout_and_player_tracker(room: Room, tracked_team: int, tracked_player
     tracker_data = TrackerData(room)
 
     # Load and render the game-specific player tracker, or fallback to generic tracker if none exists.
-    game_specific_tracker = _player_trackers.get(tracker_data.get_player_game(tracked_player), None)
-    if game_specific_tracker and not generic:
-        tracker = game_specific_tracker(tracker_data, tracked_team, tracked_player)
+    # AF: eigener Tracker für jedes Spiel; der alte bleibt unter /generic_tracker/… erreichbar
+    if not generic:
+        from .af_tracker import render_af_player_tracker
+        tracker = render_af_player_tracker(tracker_data, tracked_team, tracked_player)
     else:
         tracker = render_generic_tracker(tracker_data, tracked_team, tracked_player)
 
@@ -359,7 +360,7 @@ def get_generic_game_tracker(tracker: UUID, tracked_team: int, tracked_player: i
     return get_player_tracker(tracker, tracked_team, tracked_player, True)
 
 
-@app.route("/tracker/<suuid:tracker>", defaults={"game": "Generic"})
+@app.route("/tracker/<suuid:tracker>", defaults={"game": "AF"})  # AF: Raum-Übersicht; alte Tabelle unter …/Generic
 @app.route("/tracker/<suuid:tracker>/<game>")
 def get_multiworld_tracker(tracker: UUID, game: str) -> Response:
     key = f"{tracker}_{game}"
@@ -385,7 +386,10 @@ def get_timeout_and_multiworld_tracker(room: Room, game: str)\
         -> Tuple[int, datetime.datetime, str]:
     tracker_data = TrackerData(room)
     enabled_trackers = list(get_enabled_multiworld_trackers(room).keys())
-    if game in _multiworld_trackers:
+    if game == "AF":
+        from .af_tracker import render_af_room_tracker
+        tracker = render_af_room_tracker(tracker_data)
+    elif game in _multiworld_trackers:
         tracker = _multiworld_trackers[game](tracker_data, enabled_trackers)
     else:
         tracker = render_generic_multiworld_tracker(tracker_data, enabled_trackers)
