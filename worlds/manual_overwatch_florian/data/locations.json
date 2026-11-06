@@ -1,0 +1,766 @@
+[
+  {
+    "name": "Sieg mit D.Mon",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|D.Mon| and |Tank-Pass|"
+  },
+  {
+    "name": "D.Mon - 8500 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|D.Mon| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit D.Va",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|D.Va| and |Tank-Pass|"
+  },
+  {
+    "name": "D.Va - 9800 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|D.Va| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Domina",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Domina| and |Tank-Pass|"
+  },
+  {
+    "name": "Domina - 16800 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Domina| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Doomfist",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Doomfist| and |Tank-Pass|"
+  },
+  {
+    "name": "Doomfist - 5900 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Doomfist| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Hazard",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Hazard| and |Tank-Pass|"
+  },
+  {
+    "name": "Hazard - 7300 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Hazard| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Junker Queen",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Junker Queen| and |Tank-Pass|"
+  },
+  {
+    "name": "Junker Queen - 4600 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Junker Queen| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Mauga",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Mauga| and |Tank-Pass|"
+  },
+  {
+    "name": "Mauga - 4600 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Mauga| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Orisa",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Orisa| and |Tank-Pass|"
+  },
+  {
+    "name": "Orisa - 8800 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Orisa| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Ramattra",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Ramattra| and |Tank-Pass|"
+  },
+  {
+    "name": "Ramattra - 10600 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Ramattra| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Reinhardt",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Reinhardt| and |Tank-Pass|"
+  },
+  {
+    "name": "Reinhardt - 17000 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Reinhardt| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Roadhog",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Roadhog| and |Tank-Pass|"
+  },
+  {
+    "name": "Roadhog - 2100 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Roadhog| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Sigma",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Sigma| and |Tank-Pass|"
+  },
+  {
+    "name": "Sigma - 16600 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Sigma| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Winston",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Winston| and |Tank-Pass|"
+  },
+  {
+    "name": "Winston - 16700 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Winston| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Wrecking Ball",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Wrecking Ball| and |Tank-Pass|"
+  },
+  {
+    "name": "Wrecking Ball - 5600 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Wrecking Ball| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Zarya",
+    "category": [
+      "Tank-Helden"
+    ],
+    "requires": "|Zarya| and |Tank-Pass|"
+  },
+  {
+    "name": "Zarya - 7100 Mitigated",
+    "category": [
+      "Tank-Challenges"
+    ],
+    "requires": "|Zarya| and |Tank-Pass|"
+  },
+  {
+    "name": "Sieg mit Anran",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Anran| and |Damage-Pass|"
+  },
+  {
+    "name": "Anran - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Anran| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Ashe",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Ashe| and |Damage-Pass|"
+  },
+  {
+    "name": "Ashe - 19 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Ashe| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Bastion",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Bastion| and |Damage-Pass|"
+  },
+  {
+    "name": "Bastion - 21 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Bastion| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Cassidy",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Cassidy| and |Damage-Pass|"
+  },
+  {
+    "name": "Cassidy - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Cassidy| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Echo",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Echo| and |Damage-Pass|"
+  },
+  {
+    "name": "Echo - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Echo| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Emre",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Emre| and |Damage-Pass|"
+  },
+  {
+    "name": "Emre - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Emre| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Freja",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Freja| and |Damage-Pass|"
+  },
+  {
+    "name": "Freja - 19 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Freja| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Genji",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Genji| and |Damage-Pass|"
+  },
+  {
+    "name": "Genji - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Genji| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Hanzo",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Hanzo| and |Damage-Pass|"
+  },
+  {
+    "name": "Hanzo - 19 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Hanzo| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Junkrat",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Junkrat| and |Damage-Pass|"
+  },
+  {
+    "name": "Junkrat - 18 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Junkrat| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Mei",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Mei| and |Damage-Pass|"
+  },
+  {
+    "name": "Mei - 19 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Mei| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Pharah",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Pharah| and |Damage-Pass|"
+  },
+  {
+    "name": "Pharah - 21 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Pharah| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Reaper",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Reaper| and |Damage-Pass|"
+  },
+  {
+    "name": "Reaper - 21 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Reaper| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Shion",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Shion| and |Damage-Pass|"
+  },
+  {
+    "name": "Shion - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Shion| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Sierra",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Sierra| and |Damage-Pass|"
+  },
+  {
+    "name": "Sierra - 21 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Sierra| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Soldier 76",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Soldier 76| and |Damage-Pass|"
+  },
+  {
+    "name": "Soldier 76 - 22 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Soldier 76| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Sojourn",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Sojourn| and |Damage-Pass|"
+  },
+  {
+    "name": "Sojourn - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Sojourn| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Symmetra",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Symmetra| and |Damage-Pass|"
+  },
+  {
+    "name": "Symmetra - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Symmetra| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Torbjörn",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Torbjörn| and |Damage-Pass|"
+  },
+  {
+    "name": "Torbjörn - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Torbjörn| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Tracer",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Tracer| and |Damage-Pass|"
+  },
+  {
+    "name": "Tracer - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Tracer| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Vendetta",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Vendetta| and |Damage-Pass|"
+  },
+  {
+    "name": "Vendetta - 20 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Vendetta| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Venture",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Venture| and |Damage-Pass|"
+  },
+  {
+    "name": "Venture - 19 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Venture| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Widowmaker",
+    "category": [
+      "Damage-Helden"
+    ],
+    "requires": "|Widowmaker| and |Damage-Pass|"
+  },
+  {
+    "name": "Widowmaker - 17 Elims",
+    "category": [
+      "Damage-Challenges"
+    ],
+    "requires": "|Widowmaker| and |Damage-Pass|"
+  },
+  {
+    "name": "Sieg mit Ana",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Ana| and |Support-Pass|"
+  },
+  {
+    "name": "Ana - 7900 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Ana| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Baptiste",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Baptiste| and |Support-Pass|"
+  },
+  {
+    "name": "Baptiste - 9800 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Baptiste| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Brigitte",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Brigitte| and |Support-Pass|"
+  },
+  {
+    "name": "Brigitte - 8400 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Brigitte| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Doctrine",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Doctrine| and |Support-Pass|"
+  },
+  {
+    "name": "Doctrine - 10500 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Doctrine| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Illari",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Illari| and |Support-Pass|"
+  },
+  {
+    "name": "Illari - 9100 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Illari| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Jetpack Cat",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Jetpack Cat| and |Support-Pass|"
+  },
+  {
+    "name": "Jetpack Cat - 9300 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Jetpack Cat| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Juno",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Juno| and |Support-Pass|"
+  },
+  {
+    "name": "Juno - 8900 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Juno| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Kiriko",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Kiriko| and |Support-Pass|"
+  },
+  {
+    "name": "Kiriko - 10200 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Kiriko| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Lifeweaver",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Lifeweaver| and |Support-Pass|"
+  },
+  {
+    "name": "Lifeweaver - 11500 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Lifeweaver| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Lúcio",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Lúcio| and |Support-Pass|"
+  },
+  {
+    "name": "Lúcio - 8200 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Lúcio| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Mercy",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Mercy| and |Support-Pass|"
+  },
+  {
+    "name": "Mercy - 10600 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Mercy| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Mizuki",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Mizuki| and |Support-Pass|"
+  },
+  {
+    "name": "Mizuki - 10600 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Mizuki| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Moira",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Moira| and |Support-Pass|"
+  },
+  {
+    "name": "Moira - 10200 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Moira| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Sombra",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Sombra| and |Support-Pass|"
+  },
+  {
+    "name": "Sombra - 20 Elims",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Sombra| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Wuyang",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Wuyang| and |Support-Pass|"
+  },
+  {
+    "name": "Wuyang - 8200 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Wuyang| and |Support-Pass|"
+  },
+  {
+    "name": "Sieg mit Zenyatta",
+    "category": [
+      "Support-Helden"
+    ],
+    "requires": "|Zenyatta| and |Support-Pass|"
+  },
+  {
+    "name": "Zenyatta - 7600 Healing",
+    "category": [
+      "Support-Challenges"
+    ],
+    "requires": "|Zenyatta| and |Support-Pass|"
+  },
+  {
+    "name": "Ziel: Ranked-Streak oder 12 Helden einer Rolle",
+    "category": [
+      "Ziel"
+    ],
+    "victory": true,
+    "requires": "((|Tank-Pass| and |@Tank:5|) and (|Damage-Pass| and |@Damage:5|) and (|Support-Pass| and |@Support:5|)) or ((|Tank-Pass| and |@Tank:12|) or (|Damage-Pass| and |@Damage:12|) or (|Support-Pass| and |@Support:12|))"
+  }
+]
