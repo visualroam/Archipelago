@@ -16,21 +16,21 @@ from worlds.minecraft_fabric.logic.vanilla_logic import *
 if TYPE_CHECKING:
    from worlds.minecraft_fabric import FabricMinecraftWorld
 
-def get_goal_condition(world, state):
+def get_goal_condition(world):
     goal_id = world.options.goal_condition.value
 
     # I wish Python had Switch Case Statements :,(
     if goal_id == 0: # Ender Dragon
-        return canGoalEnderDragon(world, state)
+        return canGoalEnderDragon()
     elif goal_id == 1: # Wither
-        return canGoalWither(world, state)
+        return canGoalWither()
     elif goal_id == 2: # Both Bosses
-        return canBeatDragonAndWither(world, state)
+        return canBeatDragonAndWither()
     elif goal_id == 4: # Ruby Hunt
-        return canCompleteRubyHunt(world, state)
+        return canCompleteRubyHunt()
 
     # Since Advancements are Locations, just make game try to reach end of game
-    return canAccessVanillaEndGame(world, state)
+    return canAccessVanillaEndGame()
 
 # Creates all Regions in the Randomizer!
 def create_regions(world: FabricMinecraftWorld):
@@ -51,5 +51,5 @@ def create_regions(world: FabricMinecraftWorld):
     if "ironchests" in world.options.enabled_mods.value:
         create_ironchests_itemsanity_regions(world)
 
-    world.multiworld.completion_condition[world.player] = lambda state: get_goal_condition(world, state)
+    world.set_completion_rule(get_goal_condition(world))
 

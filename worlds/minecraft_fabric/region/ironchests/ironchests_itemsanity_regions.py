@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from worlds.minecraft_fabric.region.mc_regions_consts import *
-from worlds.minecraft_fabric.region.regions_helper import create_locations_and_connect
+from worlds.minecraft_fabric.region.regions_helper import create_locations_and_connect, smart_add_rule
 from worlds.minecraft_fabric.logic.vanilla_logic import *
 
 
@@ -20,73 +20,75 @@ def create_ironchests_itemsanity_regions(world: FabricMinecraftWorld):
         "Copper Chest Upgrade (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Iron Chest Upgrade (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Iron Dolly (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY_EXPLORATION,
-    }, lambda state: canGetIron(world, state))
+    }, canGetIron())
+    smart_add_rule(world, "Iron Dolly (Itemsanity) {Iron Chests: Restocked}", wetlandBiomesExploration(), ITEMSANITY_EXPLORATION)
 
-    # Has Smelting And Storage
+    # Has Smelting & Storage
     create_region(world, "HasSmelting", "HasSmeltingAndStorage", {
         "Copper Chest (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Copper Barrel (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Iron Chest (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Iron Barrel (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canGetIron(world, state) and canAccessChests(world, state))
+    }, canGetIron() & canAccessChests())
 
-    # Has Smelting And Storage And Gold
+    # Has Smelting & Storage & Gold
     create_region(world, "HasSmeltingAndStorage", "HasSmeltingAndStorageAndGold", {
         "Gold Chest (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Gold Barrel (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY
-    }, lambda state: canSmelt(world, state) and canAccessChests(world, state) and canGetGold(world, state))
+    }, canSmelt() & canAccessChests() & canGetGold())
 
-    # Has Smelting And Storage And Gold And Iron Tools
+    # Has Smelting & Storage & Gold & Iron Tools
     create_region(world, "HasSmeltingAndStorageAndGold", "HasSmeltingAndStorageAndGoldAndIronTools", {
         "Diamond Chest (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Diamond Barrel (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Crystal Chest (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Crystal Barrel (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canSmelt(world, state) and canAccessChests(world, state) and canGetGold(world, state) and canUseIronTools(world, state))
+    }, canSmelt() & canAccessChests() & canGetGold() & canUseIronTools())
 
-    # Has Smelting And Storage And Gold And Iron Tools And Obsidian
+    # Has Smelting & Storage & Gold & Iron Tools & Obsidian
     create_region(world, "HasSmeltingAndStorageAndGoldAndIronTools", "HasSmeltingAndStorageAndGoldAndIronToolsAndObsidian", {
         "Obsidian Chest (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Obsidian Barrel (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canSmelt(world, state) and canAccessChests(world, state) and canGetGold(world, state) and canUseIronTools(world, state) and canGetObsidian(world, state))
+    }, canSmelt() & canAccessChests() & canGetGold() & canUseIronTools() & canGetObsidian())
 
-    # Netherite Chest Upgrade And Storage
+    # Netherite Chest Upgrade & Storage
     create_region(world, "HasSmeltingAndStorageAndGoldAndIronTools", "HasSmeltingAndStorageAndGoldAndIronToolsAndNetherite", {
         "Netherite Chest (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Netherite Barrel (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canUseDiamondTools(world, state) and canSmith(world, state) and canAccessChests(world, state))
+    }, canUseDiamondTools() & canSmith() & canAccessChests())
 
     # Has Gold
     create_region(world, "Menu", "HasGold", {
         "Gold Chest Upgrade (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canGetGold(world, state))
+    }, canGetGold())
 
     # Has Obsidian
     create_region(world, "Menu", "HasObsidian", {
         "Obsidian Chest Upgrade (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canGetObsidian(world, state))
+    }, canGetObsidian())
 
-    # Has Gold And Iron Tools
+    # Has Gold & Iron Tools
     create_region(world, "HasGold", "HasGoldAndIronTools", {
         "Diamond Chest Upgrade (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Diamond Dolly (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY_EXPLORATION,
-    }, lambda state: canUseIronTools(world, state) and canGetGold(world, state))
+    }, canUseIronTools() & canGetGold())
+    smart_add_rule(world, "Diamond Dolly (Itemsanity) {Iron Chests: Restocked}", wetlandBiomesExploration(), ITEMSANITY_EXPLORATION)
 
     # Netherite Chest Upgrade
     create_region(world, "HasGoldAndIronTools", "NetheriteChest", {
         "Netherite Chest Upgrade (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canUseDiamondTools(world, state) and canSmith(world, state))
+    }, canUseDiamondTools() & canSmith())
 
-    # Can Smelt and Compact
+    # Can Smelt & Compact
     create_region(world, "HasSmelting", "CanSmeltItemsAndCompact", {
         "Key (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
         "Key Ring (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canCompactResources(world, state) and canSmelt(world, state))
+    }, canCompactResources() & canSmelt())
 
-    # Can Smelt and Compact
+    # Can Smelt & Compact
     create_region(world, "Menu", "GoldAndCompacting", {
         "Lock (Itemsanity) {Iron Chests: Restocked}": ITEMSANITY,
-    }, lambda state: canCompactResources(world, state) and canGetGold(world, state))
+    }, canCompactResources() & canGetGold())
 
 
 def create_region(world: FabricMinecraftWorld, region_name: str, new_region_name: str, locations: dict[str, int], rule=None):

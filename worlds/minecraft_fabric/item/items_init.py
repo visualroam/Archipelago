@@ -40,7 +40,41 @@ def create_items(world: FabricMinecraftWorld):
     for item in progression_bl:
         total_items = add_item_to_pool(world, item.name, total_items)
 
+    if "Natures Compass Logic" in world.options.logic_difficulty_options.value:
+        total_items = add_item_to_pool(world, "Ocean Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Plains Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Savanna Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Forest Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Jungle Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Wetland Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Mountain Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Highland Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Arid Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Underground Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Nether Biomes (Nature's Compass)", total_items)
+        total_items = add_item_to_pool(world, "End Biomes (Nature's Compass)", total_items)
 
+    if "Explorers Compass Logic" in world.options.logic_difficulty_options.value:
+        total_items = add_item_to_pool(world, "Village (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Ruins (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Ruined Portal (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Shipwreck (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Buried Treasure (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Mineshaft (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Monument (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "End City (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Desert Pyramid (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Jungle Pyramid (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Pillager Outpost (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Fortress (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Bastion Remnant (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Mansion (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Ancient City (Explorer's Compass)", total_items)
+        total_items = add_item_to_pool(world, "Heart Crystal (Explorer's Compass)", total_items)
+
+    if "Meteorology" in world.options.logic_difficulty_options.value:
+        total_items = add_item_to_pool(world, "Totem of Meteorology", total_items)
+    
     # Ruby Hunt Items
     if world.options.goal_condition.value == 4:
         world.max_ruby_count = min(world.options.total_rubies.value, total_items)

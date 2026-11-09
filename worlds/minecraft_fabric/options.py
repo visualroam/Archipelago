@@ -17,6 +17,7 @@ class GoalCondition(Choice):
     advancements_only - Goal when you collect a certain amount of Advancements and/or Items
     ruby_hunt - Goal when a certain amount of rubies are collected (McGuffin hunt)
     """
+    display_name = "Goal Condition"
     option_ender_dragon = 0
     option_wither = 1
     option_both_bosses = 2
@@ -317,6 +318,34 @@ class TimeSavingOptions(OptionSet):
         "Copper Oxidation",
     }
 
+class LogicDifficultyOptions(OptionSet):
+    """
+        Changes the logical requirements of certain locations to make progression easier
+    
+        Options:
+            "Natures Compass Logic" - Locks exploration checks that depend on rare biomes behind the ability
+            to locate that biome with Nature's Compass (Requires Nature's Compass Mod)
+            "Explorers Compass Logic" - Locks exploration checks that depend on rare structures behind the ability
+            to locate that structure with Explorer's Compass (Requires Explorer's Compass Mod)
+            "Movement Before Exploration" - Requires Jump, Sprint, Swim for checks that require exploration
+            "Sleeping Before Exploration" - Requires Sleeping for checks that require exploration
+            "Meteorology" - Requires the Totem of Meteorology (a custom item that allows manual weather setting) for
+            checks that require thunder
+        """
+    display_name = "Logic Difficulty Options"
+    default = {
+        "Movement Before Exploration",
+        "Sleeping Before Exploration",
+        "Meteorology"
+    }
+    valid_keys = {
+        "Natures Compass Logic",
+        "Explorers Compass Logic",
+        "Movement Before Exploration",
+        "Sleeping Before Exploration",
+        "Meteorology"
+    }
+
 ########################################################################################################################
 # TRAP STUFF ###########################################################################################################
 ########################################################################################################################
@@ -453,6 +482,7 @@ class FMCOptions(PerGameCommonOptions):
     keep_inventory: KeepInventory
     randomized_abilities: RandomizedAbilities
     time_saving_options: TimeSavingOptions
+    logic_difficulty_options: LogicDifficultyOptions
     # Traps
     trap_fill_percentage: TrapFillPercentage
     reverse_controls_trap_weight: ReverseControlsTrapWeight
@@ -481,7 +511,7 @@ option_groups = [
     ),
     OptionGroup(
         "Difficulty Options",
-        [ShouldHaveBeforeNetherAccess, ShouldHaveBeforeWitherOrDragon, ShouldHaveBeforeRaids, KeepInventory, RandomizedAbilities, TimeSavingOptions]
+        [ShouldHaveBeforeNetherAccess, ShouldHaveBeforeWitherOrDragon, ShouldHaveBeforeRaids, KeepInventory, RandomizedAbilities, TimeSavingOptions, LogicDifficultyOptions]
     ),
     OptionGroup(
         "Traps Options",

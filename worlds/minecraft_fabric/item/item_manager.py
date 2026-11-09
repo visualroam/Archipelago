@@ -38,5 +38,8 @@ def trap(name: str):
 
 # MODDED
 
+def needed_modded(name: str, mod: str):
+    return UnprocessedMinecraftItem(name, ItemClassification.progression, 0, mod)
+
 def needed_bl_modded(name: str, mod: str):
     return UnprocessedMinecraftItem(name, ItemClassification.progression, 1, mod)

@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from worlds.minecraft_fabric import FabricMinecraftWorld
 
+from rule_builder.rules import Rule, Has
+
 from .vanilla_logic import *
 from BaseClasses import CollectionState
 
@@ -18,118 +20,118 @@ from BaseClasses import CollectionState
 
 # BASIC COMPONENTS #####################################################################################################
 
-def canCraftAndesiteAlloy(world: FabricMinecraftWorld, state: CollectionState):
-    return canCompactResources(world, state) and canGetIron(world, state)
+def canCraftAndesiteAlloy():
+    return canCompactResources() & canGetIron()
 
-def canGetZinc(world: FabricMinecraftWorld, state: CollectionState):
-    return canGetIron(world, state) and canUseIronTools(world, state)
+def canGetZinc():
+    return canGetIron() & canUseIronTools()
 
-def canCraftBrass(world: FabricMinecraftWorld, state: CollectionState):
-    return hasMixer(world, state) and hasBlazeBurner(world, state) and canUseIronTools(world, state)
+def canCraftBrass():
+    return hasMixer() & hasBlazeBurner() & canUseIronTools()
 
-def canCraftCardboard(world: FabricMinecraftWorld, state: CollectionState):
-    return hasMixer(world, state) and canFillFluidWater(world, state) and hasPress(world, state)
+def canCraftCardboard():
+    return hasMixer() & canFillFluidWater() & hasPress()
 
-def canCraftRoseQuartz(world: FabricMinecraftWorld, state: CollectionState):
-    return canAccessNether(world, state) and canUseIronTools(world, state)
+def canCraftRoseQuartz():
+    return canAccessNether() & canUseIronTools()
 
-def canUseSandpaper(world: FabricMinecraftWorld, state: CollectionState):
-    return state.has("Sand Paper", world.player)
+def canUseSandpaper():
+    return Has("Sand Paper")
 
-def canCraftElectronTube(world: FabricMinecraftWorld, state: CollectionState):
-    return canCraftRoseQuartz(world, state) and hasPress(world, state) and canUseSandpaper(world, state)
+def canCraftElectronTube():
+    return canCraftRoseQuartz() & hasPress() & canUseSandpaper()
 
-def canCraftPercisionMechanism(world: FabricMinecraftWorld, state: CollectionState):
-    return hasDeployer(world, state) and hasPress(world, state) and hasCogs(world, state) and canUseSandpaper(world, state)
+def canCraftPercisionMechanism():
+    return hasDeployer() & hasPress() & hasCogs() & canUseSandpaper()
 
-def canCraftSturdySheet(world: FabricMinecraftWorld, state: CollectionState):
-    return (hasCrusher(world, state) and hasPress(world, state) and canUseSpout(world, state)
-            and canUseBucket(world, state) and canGetObsidian(world, state))
+def canCraftSturdySheet():
+    return (hasCrusher() & hasPress() & canUseSpout()
+            & canUseBucket() & canGetObsidian())
 
-def canCraftTrainTracks(world: FabricMinecraftWorld, state: CollectionState):
-    return hasPress(world, state) and hasDeployer(world, state)
+def canCraftTrainTracks():
+    return hasPress() & hasDeployer()
 
-def hasCogs(world: FabricMinecraftWorld, state: CollectionState):
-    return canCraftAndesiteAlloy(world, state) and state.has("Cogwheels", world.player)
+def hasCogs():
+    return canCraftAndesiteAlloy() & Has("Cogwheels")
 
-def hasBlazeBurner(world: FabricMinecraftWorld, state: CollectionState):
-    return canAccessNether(world, state) and hasPress(world, state) and state.has("Blaze Burners", world.player)
+def hasBlazeBurner():
+    return canAccessNether() & hasPress() & Has("Blaze Burners")
 
-def canUseBlazeCake(world: FabricMinecraftWorld, state: CollectionState):
-    return hasBlazeBurner(world, state) and hasCrusher(world, state) and canCraftDriedKelp(world, state) and canUseSpout(world, state)
+def canUseBlazeCake():
+    return hasBlazeBurner() & hasCrusher() & canCraftDriedKelp() & canUseSpout()
 
-def canFillFluidWater(world: FabricMinecraftWorld, state: CollectionState):
-    return hasPump(world, state) and canUseBucket(world, state)
+def canFillFluidWater():
+    return hasPump() & canUseBucket()
 
-def canMakeHeat(world: FabricMinecraftWorld, state: CollectionState):
-    return (canUseFlintAndSteel(world, state) or canUseStoneTools(world, state) or canGetIron(world, state) or
-            canUseBucket(world, state))
+def canMakeHeat():
+    return (canUseFlintAndSteel() | canUseStoneTools() | canGetIron() |
+            canUseBucket())
 
-def canUsePackager(world: FabricMinecraftWorld, state: CollectionState):
-    return (canCompactResources(world, state) and canGetIron(world, state) and canUseIronTools(world, state) and
-            canAccessChests(world, state) and canCraftCardboard(world, state))
+def canUsePackager():
+    return (canCompactResources() & canGetIron() & canUseIronTools() &
+            canAccessChests() & canCraftCardboard())
 
 # POWER GENERATION #####################################################################################################
 
-def hasWaterWheel(world: FabricMinecraftWorld, state: CollectionState):
-    return canCraftAndesiteAlloy(world, state) and state.has("Water Wheels", world.player)
+def hasWaterWheel():
+    return canCraftAndesiteAlloy() & Has("Water Wheels")
 
-def hasWindmill(world: FabricMinecraftWorld, state: CollectionState):
-    return canCraftAndesiteAlloy(world, state) and state.has("Windmills", world.player)
+def hasWindmill():
+    return canCraftAndesiteAlloy() & Has("Windmills")
 
-def hasSteamEngine(world: FabricMinecraftWorld, state: CollectionState):
-    return ((canCraftAndesiteAlloy(world, state) and state.has("Steam Engines", world.player)
-            and canCompactResources(world, state) and canFillFluidTankWater(world, state) and canMakeHeat(world, state))
-            and canUseIronTools(world, state))
+def hasSteamEngine():
+    return ((canCraftAndesiteAlloy() & Has("Steam Engines")
+            & canCompactResources() & canFillFluidTankWater() & canMakeHeat())
+            & canUseIronTools())
 
-def hasMorePower(world: FabricMinecraftWorld, state: CollectionState):
-    return hasWaterWheel(world, state) or hasWindmill(world, state) or hasSteamEngine(world, state)
+def hasMorePower():
+    return hasWaterWheel() | hasWindmill() | hasSteamEngine()
 
 # CRAFTING #############################################################################################################
 
-def hasPress(world: FabricMinecraftWorld, state: CollectionState):
-    return (state.has("Mechanical Press Recipes", world.player) and canCompactResources(world, state) and
-            canCraftAndesiteAlloy(world, state))
+def hasPress():
+    return (Has("Mechanical Press Recipes") & canCompactResources() &
+            canCraftAndesiteAlloy())
 
-def hasMixer(world: FabricMinecraftWorld, state: CollectionState):
-    return (state.has("Mechanical Mixer Recipes", world.player) and canCraftAndesiteAlloy(world, state)
-            and hasCogs(world, state) and hasPress(world, state))
+def hasMixer():
+    return (Has("Mechanical Mixer Recipes") & canCraftAndesiteAlloy()
+            & hasCogs() & hasPress())
 
-def hasSaw(world: FabricMinecraftWorld, state: CollectionState):
-    return hasPress(world, state)
+def hasSaw():
+    return hasPress()
 
-def hasDeployer(world: FabricMinecraftWorld, state: CollectionState):
-    return canCraftElectronTube(world, state) and canCraftBrass(world, state)
+def hasDeployer():
+    return canCraftElectronTube() & canCraftBrass()
 
-def canUseSpout(world: FabricMinecraftWorld, state: CollectionState):
-    return canCraftDriedKelp(world, state) and canUseStoneTools(world, state) and hasPump(world, state) and canUseBucket(world, state)
+def canUseSpout():
+    return canCraftDriedKelp() & canUseStoneTools() & hasPump() & canUseBucket()
 
-def hasMechanicalCrafter(world: FabricMinecraftWorld, state: CollectionState):
-    return hasMorePower(world, state) and canCraftElectronTube(world, state) and canCraftBrass(world, state)
+def hasMechanicalCrafter():
+    return hasMorePower() & canCraftElectronTube() & canCraftBrass()
 
-def hasCrusher(world: FabricMinecraftWorld, state: CollectionState):
-    return hasMechanicalCrafter(world, state)
+def hasCrusher():
+    return hasMechanicalCrafter()
 
 # FAN CRAFTING #########################################################################################################
 
-def canWash(world: FabricMinecraftWorld, state: CollectionState):
-    return hasPress(world, state)
+def canWash():
+    return hasPress()
 
-def canHaunt(world: FabricMinecraftWorld, state: CollectionState):
-    return hasPress(world, state) and canAccessNether(world, state)
+def canHaunt():
+    return hasPress() & canAccessNether()
 
 # FLUID TANKS ##########################################################################################################
 
-def hasFluidTank(world: FabricMinecraftWorld, state: CollectionState):
-    return hasPress(world, state) and canAccessChests(world, state) and canGetIron(world, state)
+def hasFluidTank():
+    return hasPress() & canAccessChests() & canGetIron()
 
-def canFillFluidTankWater(world: FabricMinecraftWorld, state: CollectionState):
-    return hasFluidTank(world, state) and canFillFluidWater(world, state)
+def canFillFluidTankWater():
+    return hasFluidTank() & canFillFluidWater()
 
-def hasPump(world: FabricMinecraftWorld, state: CollectionState):
-    return hasCogs(world, state) and hasPress(world, state)
+def hasPump():
+    return hasCogs() & hasPress()
 
 # OTHER CHECKS #########################################################################################################
 
-def canCraftSPDecorativeStone(world: FabricMinecraftWorld, state: CollectionState):
-    return hasSaw(world, state) or canAccessMiscJobsites(world, state)
+def canCraftSPDecorativeStone():
+    return hasSaw() | canAccessMiscJobsites()

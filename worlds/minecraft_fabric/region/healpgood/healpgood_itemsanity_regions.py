@@ -3,6 +3,7 @@ from __future__ import annotations
 from worlds.minecraft_fabric.region.mc_regions_consts import ITEMSANITY_HARD, DISCS
 from worlds.minecraft_fabric.region.regions_helper import create_locations_and_connect
 from worlds.minecraft_fabric.logic.vanilla_logic import *
+from worlds.minecraft_fabric.logic.healpgood_logic import *
 
 
 if TYPE_CHECKING:
@@ -25,20 +26,20 @@ def create_healpgood_itemsanity_regions(world: FabricMinecraftWorld):
         "Heart Crystal Bricks (Itemsanity) {Healing Pretty Good}": ITEMSANITY_HARD,
         "Heart Crystal Brick Stairs (Itemsanity) {Healing Pretty Good}": ITEMSANITY_HARD,
         "Heart Crystal Brick Slab (Itemsanity) {Healing Pretty Good}": ITEMSANITY_HARD
-    }, lambda state: canUseDiamondTools(world, state))
+    }, canUseDiamondTools() & heartCrystalExploration())
 
     create_locations_and_connect(world, "Menu", "TradingHealPGoodItemsanity", {
         "Bottle O' Healing (Itemsanity) {Healing Pretty Good}": ITEMSANITY_HARD
-    }, lambda state: canTrade(world, state))
+    }, canTrade())
 
     create_region(world, "Menu", "HasNetherAccess", {
         "Heart Lantern (Itemsanity) {Healing Pretty Good}": ITEMSANITY_HARD,
         "Crystal Heart (Itemsanity) {Healing Pretty Good}": ITEMSANITY_HARD
-    }, lambda state: canAccessNether(world, state))
+    }, canAccessNether() & heartCrystalExploration())
 
     create_region(world, "HasNetherAccess", "HasNetherAndEndAccess", {
         "Heart Container (Itemsanity) {Healing Pretty Good}": ITEMSANITY_HARD
-    }, lambda state: canAccessEnd(world, state))
+    }, canAccessEnd() & heartCrystalExploration())
 
 
 

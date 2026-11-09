@@ -67,6 +67,7 @@ class FabricMinecraftWorld(World):
             "randomized_abilities": self.options.randomized_abilities.value,
             "possible_randomized_abilities": self.options.randomized_abilities.valid_keys,
             "time_saving_options": self.options.time_saving_options.value,
+            "logic_difficulty_options": self.options.logic_difficulty_options.value,
             "enabled_mods": self.options.enabled_mods.value
         }
 
