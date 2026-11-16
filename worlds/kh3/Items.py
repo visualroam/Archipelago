@@ -1,7 +1,6 @@
 from BaseClasses import Item, ItemClassification
 
 from .Data import (
-    BAD_STATUS_TRAP_ITEM_NAMES,
     CONTROLLER_UNLOCK_ITEM_NAMES,
     FILLER_ITEM_RUNTIME_TOKEN_BY_NAME,
     KEYBLADE_STYLE_ITEM_NAMES,
@@ -11,6 +10,7 @@ from .Data import (
     PROGRESSIVE_KEYBLADE_LEVEL_ITEM_NAMES,
     PROOF_ITEMS,
     STYLE_CHANGE_UNLOCK_ITEM,
+    TRAP_ITEM_NAMES,
     ULTIMA_WEAPON_SHARD_ITEM_NAME,
     build_item_name_to_id,
     is_keyblade_item_name,
@@ -40,7 +40,7 @@ def classify_item(name: str) -> ItemClassification:
         return ItemClassification.progression
     if name in SPACE_ITEM_IDS:
         return ItemClassification.useful
-    if name in BAD_STATUS_TRAP_ITEM_NAMES:
+    if name in TRAP_ITEM_NAMES:
         return ItemClassification.trap
     if name in PROGRESSIVE_KEYBLADE_LEVEL_ITEM_NAMES:
         return ItemClassification.useful

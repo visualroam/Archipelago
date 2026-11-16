@@ -10,18 +10,18 @@
             "requires": "|Jett|"
         },
         {
-            "name": "Jett - Ace",
+            "name": "Jett - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Jett| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Jett - 25 Kill Bomb",
+            "name": "Jett - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Jett| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -34,18 +34,18 @@
             "requires": "|Phoenix|"
         },
         {
-            "name": "Phoenix - Ace",
+            "name": "Phoenix - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Phoenix| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Phoenix - 25 Kill Bomb",
+            "name": "Phoenix - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Phoenix| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -58,18 +58,18 @@
             "requires": "|Raze|"
         },
         {
-            "name": "Raze - Ace",
+            "name": "Raze - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Raze| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Raze - 25 Kill Bomb",
+            "name": "Raze - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Raze| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -82,18 +82,18 @@
             "requires": "|Reyna|"
         },
         {
-            "name": "Reyna - Ace",
+            "name": "Reyna - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Reyna| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Reyna - 25 Kill Bomb",
+            "name": "Reyna - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Reyna| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -106,18 +106,18 @@
             "requires": "|Yoru|"
         },
         {
-            "name": "Yoru - Ace",
+            "name": "Yoru - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Yoru| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Yoru - 25 Kill Bomb",
+            "name": "Yoru - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Yoru| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -130,18 +130,18 @@
             "requires": "|Neon|"
         },
         {
-            "name": "Neon - Ace",
+            "name": "Neon - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Neon| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Neon - 25 Kill Bomb",
+            "name": "Neon - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Neon| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -154,18 +154,18 @@
             "requires": "|Iso|"
         },
         {
-            "name": "Iso - Ace",
+            "name": "Iso - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Iso| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Iso - 25 Kill Bomb",
+            "name": "Iso - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Iso| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -178,18 +178,18 @@
             "requires": "|Waylay|"
         },
         {
-            "name": "Waylay - Ace",
+            "name": "Waylay - Match MVP",
             "category": [
                 "Duelisten",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Waylay| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Waylay - 25 Kill Bomb",
+            "name": "Waylay - Kill Bomb",
             "category": [
                 "Duelisten",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Waylay| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -202,18 +202,18 @@
             "requires": "|Sova|"
         },
         {
-            "name": "Sova - Ace",
+            "name": "Sova - Match MVP",
             "category": [
                 "Initiatoren",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Sova| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Sova - 25 Kill Bomb",
+            "name": "Sova - Kill Bomb",
             "category": [
                 "Initiatoren",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Sova| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -226,18 +226,18 @@
             "requires": "|Breach|"
         },
         {
-            "name": "Breach - Ace",
+            "name": "Breach - Match MVP",
             "category": [
                 "Initiatoren",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Breach| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Breach - 25 Kill Bomb",
+            "name": "Breach - Kill Bomb",
             "category": [
                 "Initiatoren",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Breach| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -250,18 +250,18 @@
             "requires": "|Skye|"
         },
         {
-            "name": "Skye - Ace",
+            "name": "Skye - Match MVP",
             "category": [
                 "Initiatoren",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Skye| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Skye - 25 Kill Bomb",
+            "name": "Skye - Kill Bomb",
             "category": [
                 "Initiatoren",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Skye| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -274,18 +274,18 @@
             "requires": "|KAY/O|"
         },
         {
-            "name": "KAY/O - Ace",
+            "name": "KAY/O - Match MVP",
             "category": [
                 "Initiatoren",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|KAY/O| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "KAY/O - 25 Kill Bomb",
+            "name": "KAY/O - Kill Bomb",
             "category": [
                 "Initiatoren",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|KAY/O| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -298,18 +298,18 @@
             "requires": "|Fade|"
         },
         {
-            "name": "Fade - Ace",
+            "name": "Fade - Match MVP",
             "category": [
                 "Initiatoren",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Fade| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Fade - 25 Kill Bomb",
+            "name": "Fade - Kill Bomb",
             "category": [
                 "Initiatoren",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Fade| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -322,18 +322,18 @@
             "requires": "|Gekko|"
         },
         {
-            "name": "Gekko - Ace",
+            "name": "Gekko - Match MVP",
             "category": [
                 "Initiatoren",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Gekko| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Gekko - 25 Kill Bomb",
+            "name": "Gekko - Kill Bomb",
             "category": [
                 "Initiatoren",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Gekko| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -346,18 +346,18 @@
             "requires": "|Tejo|"
         },
         {
-            "name": "Tejo - Ace",
+            "name": "Tejo - Match MVP",
             "category": [
                 "Initiatoren",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Tejo| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Tejo - 25 Kill Bomb",
+            "name": "Tejo - Kill Bomb",
             "category": [
                 "Initiatoren",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Tejo| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -370,18 +370,18 @@
             "requires": "|Brimstone|"
         },
         {
-            "name": "Brimstone - Ace",
+            "name": "Brimstone - Match MVP",
             "category": [
                 "Controller",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Brimstone| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Brimstone - 25 Kill Bomb",
+            "name": "Brimstone - Kill Bomb",
             "category": [
                 "Controller",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Brimstone| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -394,18 +394,18 @@
             "requires": "|Viper|"
         },
         {
-            "name": "Viper - Ace",
+            "name": "Viper - Match MVP",
             "category": [
                 "Controller",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Viper| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Viper - 25 Kill Bomb",
+            "name": "Viper - Kill Bomb",
             "category": [
                 "Controller",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Viper| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -418,18 +418,18 @@
             "requires": "|Omen|"
         },
         {
-            "name": "Omen - Ace",
+            "name": "Omen - Match MVP",
             "category": [
                 "Controller",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Omen| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Omen - 25 Kill Bomb",
+            "name": "Omen - Kill Bomb",
             "category": [
                 "Controller",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Omen| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -442,18 +442,18 @@
             "requires": "|Astra|"
         },
         {
-            "name": "Astra - Ace",
+            "name": "Astra - Match MVP",
             "category": [
                 "Controller",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Astra| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Astra - 25 Kill Bomb",
+            "name": "Astra - Kill Bomb",
             "category": [
                 "Controller",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Astra| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -466,18 +466,18 @@
             "requires": "|Harbor|"
         },
         {
-            "name": "Harbor - Ace",
+            "name": "Harbor - Match MVP",
             "category": [
                 "Controller",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Harbor| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Harbor - 25 Kill Bomb",
+            "name": "Harbor - Kill Bomb",
             "category": [
                 "Controller",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Harbor| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -490,18 +490,18 @@
             "requires": "|Clove|"
         },
         {
-            "name": "Clove - Ace",
+            "name": "Clove - Match MVP",
             "category": [
                 "Controller",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Clove| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Clove - 25 Kill Bomb",
+            "name": "Clove - Kill Bomb",
             "category": [
                 "Controller",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Clove| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -514,18 +514,18 @@
             "requires": "|Miks|"
         },
         {
-            "name": "Miks - Ace",
+            "name": "Miks - Match MVP",
             "category": [
                 "Controller",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Miks| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Miks - 25 Kill Bomb",
+            "name": "Miks - Kill Bomb",
             "category": [
                 "Controller",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Miks| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -538,18 +538,18 @@
             "requires": "|Sage|"
         },
         {
-            "name": "Sage - Ace",
+            "name": "Sage - Match MVP",
             "category": [
                 "Sentinels",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Sage| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Sage - 25 Kill Bomb",
+            "name": "Sage - Kill Bomb",
             "category": [
                 "Sentinels",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Sage| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -562,18 +562,18 @@
             "requires": "|Cypher|"
         },
         {
-            "name": "Cypher - Ace",
+            "name": "Cypher - Match MVP",
             "category": [
                 "Sentinels",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Cypher| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Cypher - 25 Kill Bomb",
+            "name": "Cypher - Kill Bomb",
             "category": [
                 "Sentinels",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Cypher| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -586,18 +586,18 @@
             "requires": "|Killjoy|"
         },
         {
-            "name": "Killjoy - Ace",
+            "name": "Killjoy - Match MVP",
             "category": [
                 "Sentinels",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Killjoy| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Killjoy - 25 Kill Bomb",
+            "name": "Killjoy - Kill Bomb",
             "category": [
                 "Sentinels",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Killjoy| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -610,18 +610,18 @@
             "requires": "|Chamber|"
         },
         {
-            "name": "Chamber - Ace",
+            "name": "Chamber - Match MVP",
             "category": [
                 "Sentinels",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Chamber| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Chamber - 25 Kill Bomb",
+            "name": "Chamber - Kill Bomb",
             "category": [
                 "Sentinels",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Chamber| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -634,18 +634,18 @@
             "requires": "|Deadlock|"
         },
         {
-            "name": "Deadlock - Ace",
+            "name": "Deadlock - Match MVP",
             "category": [
                 "Sentinels",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Deadlock| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Deadlock - 25 Kill Bomb",
+            "name": "Deadlock - Kill Bomb",
             "category": [
                 "Sentinels",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Deadlock| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -658,18 +658,18 @@
             "requires": "|Vyse|"
         },
         {
-            "name": "Vyse - Ace",
+            "name": "Vyse - Match MVP",
             "category": [
                 "Sentinels",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Vyse| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Vyse - 25 Kill Bomb",
+            "name": "Vyse - Kill Bomb",
             "category": [
                 "Sentinels",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Vyse| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },
@@ -682,18 +682,18 @@
             "requires": "|Veto|"
         },
         {
-            "name": "Veto - Ace",
+            "name": "Veto - Match MVP",
             "category": [
                 "Sentinels",
-                "Aces"
+                "Match MVPs"
             ],
             "requires": "|Veto| and (|@Primärwaffen:1| or |Waffen aufheben| or |Waffen requesten|)"
         },
         {
-            "name": "Veto - 25 Kill Bomb",
+            "name": "Veto - Kill Bomb",
             "category": [
                 "Sentinels",
-                "25 Kill Bombs"
+                "Kill Bombs"
             ],
             "requires": "|Veto| and (|@Primärwaffen:2| or (|@Primärwaffen:1| and (|Waffen aufheben| or |Waffen requesten|)) or (|Waffen aufheben| and |Waffen requesten|))"
         },

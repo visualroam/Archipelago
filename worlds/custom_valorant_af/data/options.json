@@ -25,6 +25,24 @@
             "range_start": 0,
             "range_end": 18,
             "default": 10
+        },
+        "swiftplay_counts": {
+            "type": "Toggle",
+            "display_name": "Swiftplay zählt",
+            "description": [
+                "Nur für den op.gg Client: Zählen Swiftplay-Spiele zusätzlich zu Unrated für Win, Match MVP, Kill Bomb und Ziel?"
+            ],
+            "default": false
+        },
+        "kill_bomb": {
+            "type": "Range",
+            "display_name": "Kills für Kill Bomb",
+            "description": [
+                "Wie viele Kills in einem Match der Check Kill Bomb braucht."
+            ],
+            "range_start": 10,
+            "range_end": 40,
+            "default": 25
         }
     }
 }

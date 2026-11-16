@@ -587,3 +587,19 @@ def add_client_to_launcher() -> None:
         components.append(Component("Manual Discord Server", "ManualDiscord", func=lambda: webbrowser.open("https://discord.gg/hm4rQnTzQ5"), icon="discord", component_type=Type.ADJUSTER))
 
 add_client_to_launcher()
+
+
+# Custom Valorant AF: op.gg-Client (hakt Win/Ace/25 Kill Bomb automatisch ab, ändert keine Checks)
+def launch_opgg_client(*args):
+    import CommonClient
+    from .opgg_client import launch as Main
+
+    if CommonClient.gui_enabled:
+        launch_subprocess(Main, name="Custom Valorant AF op.gg Client", args=args)
+    else:
+        Main(*args)
+
+
+if not any(c.display_name == "Custom Valorant AF op.gg Client" for c in components):
+    components.append(Component("Custom Valorant AF op.gg Client", func=launch_opgg_client,
+                                component_type=Type.CLIENT))

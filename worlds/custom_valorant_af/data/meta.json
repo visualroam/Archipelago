@@ -12,7 +12,7 @@
         ],
         "apworld_description": [
             "Custom Valorant AF – Valorant (Unrated) als Manual: Agenten und Waffen werden über Archipelago freigeschaltet. Start mit Classic + 1 zufälligem Agenten.",
-            "Checks pro Agent: Win, Ace, 25 Kill Bomb."
+            "Checks pro Agent: Win, Match MVP, Kill Bomb."
         ],
         "web": {
             "_comment": "for more info check github https://github.com/ArchipelagoMW/Archipelago/blob/main/docs/world%20api.md#webworld-class",

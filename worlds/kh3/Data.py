@@ -7,6 +7,13 @@ from typing import Iterable
 
 from .Ingredients import append_ingredient_locations, ingredient_spot_is_junk
 from .Adversaries import append_adversary_locations
+from .CharityTraps import (
+    CHARITY_ITEM_ID_RESERVATIONS,
+    CHARITY_RUNTIME_TOKENS,
+    RETIRED_MANUAL_TRAP_ALIASES,
+    RETIRED_MANUAL_TRAP_TOKENS,
+    TRAP_ITEM_ALIASES,
+)
 from .Logic import (
     LOGIC_REQUIREMENT_ITEM_NAMES,
     MAGIC_UNLOCK_ITEM,
@@ -189,11 +196,19 @@ PROGRESSIVE_KEYBLADE_LEVEL_BASE_RUNTIME_TOKENS = frozenset(
 )
 
 BAD_STATUS_TRAP_RUNTIME_TOKEN_BY_ITEM_NAME = {
-    "Sneeze Trap": "ETresBadStatusType::TRES_BADSTAT_SNEEZE",
-    "Burn Trap": "ETresBadStatusType::TRES_BADSTAT_BURN",
+    "Trap: Sneeze": "ETresBadStatusType::TRES_BADSTAT_SNEEZE",
+    "Trap: Burn": "ETresBadStatusType::TRES_BADSTAT_BURN",
 }
 BAD_STATUS_TRAP_ITEM_NAMES = tuple(BAD_STATUS_TRAP_RUNTIME_TOKEN_BY_ITEM_NAME)
 BAD_STATUS_TRAP_RUNTIME_TOKENS = frozenset(BAD_STATUS_TRAP_RUNTIME_TOKEN_BY_ITEM_NAME.values())
+
+TRAP_RUNTIME_TOKENS_BY_NAME = {
+    **BAD_STATUS_TRAP_RUNTIME_TOKEN_BY_ITEM_NAME,
+    **CHARITY_RUNTIME_TOKENS,
+    **RETIRED_MANUAL_TRAP_TOKENS,
+}
+TRAP_ITEM_NAMES = (*BAD_STATUS_TRAP_ITEM_NAMES, *CHARITY_RUNTIME_TOKENS)
+TRAP_RUNTIME_TOKENS = frozenset(TRAP_RUNTIME_TOKENS_BY_NAME.values())
 
 ULTIMA_WEAPON_ITEM_NAME = "Ultima Weapon"
 ULTIMA_WEAPON_RUNTIME_TOKEN = "WEP_KEYBLADE_SO_015"
@@ -978,7 +993,11 @@ def load_extracted_data() -> dict:
 
 
 def resolve_item_display_name(item_name: str) -> str:
-    display_name = RAW_ITEM_DISPLAY_NAMES.get(item_name)
+    display_name = (
+        TRAP_ITEM_ALIASES.get(item_name)
+        or RETIRED_MANUAL_TRAP_ALIASES.get(item_name)
+        or RAW_ITEM_DISPLAY_NAMES.get(item_name)
+    )
     if display_name is not None:
         return display_name
     if "\\'" in item_name:
@@ -1027,7 +1046,7 @@ def _build_item_name_to_runtime_token() -> dict[str, str]:
     mapping["Archipelago Item"] = "AP_ITEM_000"
     mapping.update(FILLER_ITEM_RUNTIME_TOKEN_BY_NAME)
     mapping.update(PROGRESSIVE_KEYBLADE_LEVEL_RUNTIME_TOKEN_BY_ITEM_NAME)
-    mapping.update(BAD_STATUS_TRAP_RUNTIME_TOKEN_BY_ITEM_NAME)
+    mapping.update(TRAP_RUNTIME_TOKENS_BY_NAME)
     mapping.update(KEYBLADE_STYLE_RUNTIME_TOKEN_BY_ITEM_NAME)
     for item_name, metadata in CONTROLLER_UNLOCK_ITEMS.items():
         mapping[item_name] = f"{CONTROLLER_UNLOCK_RUNTIME_TOKEN_PREFIX}{metadata['key']}"
@@ -1066,7 +1085,7 @@ def _build_runtime_token_to_item_name() -> dict[str, str]:
     })
     mapping.update({
         runtime_token: item_name
-        for item_name, runtime_token in BAD_STATUS_TRAP_RUNTIME_TOKEN_BY_ITEM_NAME.items()
+        for item_name, runtime_token in TRAP_RUNTIME_TOKENS_BY_NAME.items()
     })
     mapping.update({
         runtime_token: item_name
@@ -1265,7 +1284,7 @@ def _local_seeded_reward_requires_bridge_delivery(
         # Pouch item rows provide presentation/inventory only; the bridge's
         # composite runtime grant is what applies their munny value.
         return True
-    if runtime_token and normalize_runtime_token(str(runtime_token)) in BAD_STATUS_TRAP_RUNTIME_TOKENS:
+    if runtime_token and normalize_runtime_token(str(runtime_token)) in TRAP_RUNTIME_TOKENS:
         return True
     if location_type == "vbonus" and runtime_token:
         normalized = normalize_runtime_token(str(runtime_token).rstrip("\0"))
@@ -1569,6 +1588,11 @@ def build_item_name_to_id(data: dict) -> dict[str, int]:
         item_name_to_id[item_name] = base_id + next_index
         next_index += 1
     item_name_to_id["Unlock: Links"] = base_id + next_index
+    next_index += 1
+    for item_name in CHARITY_ITEM_ID_RESERVATIONS:
+        if item_name in CHARITY_RUNTIME_TOKENS:
+            item_name_to_id[item_name] = base_id + next_index
+        next_index += 1
     from .Space import SPACE_ITEM_IDS
     item_name_to_id.update(SPACE_ITEM_IDS)
     return item_name_to_id

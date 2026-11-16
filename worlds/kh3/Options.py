@@ -5,6 +5,8 @@ from Options import (
     DeathLink,
     DefaultOnToggle,
     NamedRange,
+    OptionDict,
+    OptionError,
     OptionGroup,
     OptionSet,
     PerGameCommonOptions,
@@ -15,10 +17,18 @@ from Options import (
 
 from .BossCatalog import BOSS_BLACKLIST_CATALOG_KEYS, BOSS_BLACKLIST_KEYS, BOSS_BLACKLIST_LABELS
 
+from .CharityTraps import (
+    PRO_CODE_DEFAULT_DURATIONS,
+    RETIRED_MANUAL_TRAP_NAMES,
+    TRAP_ITEM_ALIASES,
+    valid_pro_code_duration,
+)
 from .Data import (
     ALL_GOAL_KEY_ITEM_NAMES,
+    BAD_STATUS_TRAP_ITEM_NAMES,
     SEVEN_HEART_PIECES_GOAL,
     THREE_PROOFS_GOAL,
+    TRAP_ITEM_NAMES,
     VANILLA_LOCATION_POOL_VALUE,
     goal_key_item_counts,
 )
@@ -321,14 +331,46 @@ class JunkTheCaribbeanChests(Toggle):
 
 class TrapPercentage(Range):
     """
-    Percentage of remaining filler items replaced by KH3 traps. Trap types are
-    selected with equal probability between Sneeze Trap and Burn Trap.
+    Percentage of eligible filler replaced by the selected KH3 trap types.
+    Set to zero to keep traps out of the random pool and send them on demand.
     """
 
     display_name = "Trap Percentage"
     range_start = 0
     range_end = 100
     default = 0
+
+
+class TrapTypes(OptionSet):
+    """AP item names eligible for random placement. The default is Sneeze and Burn.
+
+    All registered traps are available to room admins.
+    The choice here controls which items can be rolled by Trap Percentage.
+    """
+
+    display_name = "Trap Types"
+    valid_keys = frozenset(TRAP_ITEM_NAMES)
+    default = frozenset(BAD_STATUS_TRAP_ITEM_NAMES)
+
+    def __init__(self, value, random_str=None):
+        # Accept older player YAMLs that still select retired manual traps.
+        selected = {TRAP_ITEM_ALIASES.get(name, name) for name in value if name not in RETIRED_MANUAL_TRAP_NAMES}
+        super().__init__(selected, random_str)
+
+
+class ProCodeTrapDurations(OptionDict):
+    """Duration in whole seconds for each native PRO Code trap. Keys are the AP item names."""
+
+    display_name = "PRO Code Trap Durations (Seconds)"
+    valid_keys = frozenset(PRO_CODE_DEFAULT_DURATIONS)
+    default = PRO_CODE_DEFAULT_DURATIONS
+
+    def __init__(self, value):
+        durations = {TRAP_ITEM_ALIASES.get(name, name): seconds for name, seconds in value.items()}
+        for name, seconds in durations.items():
+            if not valid_pro_code_duration(seconds):
+                raise OptionError(f"Duration for {name!r} must be a positive whole number of seconds.")
+        super().__init__(durations)
 
 
 class KH3LocationPoolMode(Choice):
@@ -1591,6 +1633,8 @@ class KH3Options(PerGameCommonOptions):
     ultima_weapon_mode: UltimaWeaponMode
     ultima_weapon_shard_count: UltimaWeaponShardCount
     trap_percentage: TrapPercentage
+    trap_types: TrapTypes
+    pro_code_trap_durations: ProCodeTrapDurations
     olympus_pool: OlympusPool
     twilight_town_pool: TwilightTownPool
     toy_box_pool: ToyBoxPool
@@ -1818,6 +1862,8 @@ option_groups = [
         UltimaWeaponMode,
         UltimaWeaponShardCount,
         TrapPercentage,
+        TrapTypes,
+        ProCodeTrapDurations,
     ]),
     OptionGroup("KH3 Randomizer Rules", [
         PortalUnlocks,

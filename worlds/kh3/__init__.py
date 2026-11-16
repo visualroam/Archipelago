@@ -25,8 +25,8 @@ from worlds.LauncherComponents import (
 
 from .Bridge import BRIDGE_PROTOCOL_NAME, BRIDGE_PROTOCOL_VERSION, KH3_WORLD_VERSION, build_bridge_slot_data
 from .ClassicKingdomLogic import record_useful_game
+from .CharityTraps import CHARITY_TRAPS, TRAP_ITEM_ALIASES
 from .Data import (
-    BAD_STATUS_TRAP_ITEM_NAMES,
     CHEST_LOGIC_REQUIREMENTS,
     CLASSIC_KINGDOM_ALL_GAMES_SOURCE_ID,
     CLASSIC_KINGDOM_UNLOCK_ITEM_NAMES,
@@ -64,6 +64,7 @@ from .Data import (
     STARTING_PORTAL_KEYBLADE_ITEM_NAMES,
     STATIC_KEYBLADE_UPGRADE_SANITY_KEYBLADE_NAMES,
     STYLE_CHANGE_UNLOCK_ITEM,
+    TRAP_ITEM_NAMES,
     ULTIMA_WEAPON_ITEM_NAME,
     ULTIMA_WEAPON_SHARD_ITEM_NAME,
     VICTORY_BONUS_LOGIC_REQUIREMENTS,
@@ -330,6 +331,7 @@ class KH3World(World):
     item_name_to_id = item_name_to_id
     item_name_aliases = {
         **LOGIC_REQUIREMENT_ITEM_ALIASES,
+        **TRAP_ITEM_ALIASES,
         **{
             item_name.removeprefix("Party Member: "): item_name
             for item_name in PARTY_MEMBER_UNLOCK_ITEM_NAMES
@@ -345,7 +347,8 @@ class KH3World(World):
         "Keyblade Styles": KEYBLADE_STYLE_ITEM_NAMES,
         "Party Member Unlocks": PARTY_MEMBER_UNLOCK_ITEM_NAMES,
         "Keyblade Upgrades": PROGRESSIVE_KEYBLADE_LEVEL_ITEM_NAMES,
-        "Traps": BAD_STATUS_TRAP_ITEM_NAMES,
+        "Traps": TRAP_ITEM_NAMES,
+        "Charity Royale": frozenset(CHARITY_TRAPS),
     }
     location_name_to_id = location_name_to_id
     location_name_groups = location_name_groups
@@ -578,6 +581,10 @@ class KH3World(World):
         ]
 
     def _add_trap_items(self, item_pool: list[Item]) -> None:
+        selected = self.options.trap_types.value
+        trap_names = [name for name in TRAP_ITEM_NAMES if name in selected]
+        if not trap_names:
+            return
         protect_munny_pouches = any(
             location.get("type") == "shop"
             for location in self.active_locations
@@ -593,7 +600,7 @@ class KH3World(World):
             return
 
         for index in self.random.sample(filler_indices, trap_count):
-            item_pool[index] = self.create_item(self.random.choice(BAD_STATUS_TRAP_ITEM_NAMES))
+            item_pool[index] = self.create_item(self.random.choice(trap_names))
 
     def _add_moogle_shop_funding_items(self, item_pool: list[Item]) -> None:
         shop_check_count = sum(
@@ -1389,6 +1396,7 @@ class KH3World(World):
             "moogle_shop_checks",
             "moogle_shop_price",
             "trap_percentage",
+            "pro_code_trap_durations",
             "auto_skip_cutscenes",
             "color_randomization",
             "music_shuffle",

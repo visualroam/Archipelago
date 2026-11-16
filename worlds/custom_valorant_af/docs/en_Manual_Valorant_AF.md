@@ -31,8 +31,15 @@ Unrated. Du startest mit der **Classic** und **einem zufälligen Agenten**. Alle
 
 ## Checks (pro Agent)
 - **Win** – ein Unrated-Match mit dem Agenten gewinnen
-- **Ace** – ein Ace mit dem Agenten
-- **25 Kill Bomb** – 25+ Kills in einem Match mit dem Agenten
+- **Match MVP** – Match MVP mit dem Agenten (höchster Kampfwert aller 10 Spieler)
+- **Kill Bomb** – mindestens so viele Kills in einem Match wie in der YAML (`kill_bomb`, Standard 25)
 
 ## Ziel
 "Unrated-Legende": genug Agenten und Waffen freigeschaltet (YAML: goal_agents / goal_weapons), dann ein letztes Unrated-Match gewinnen.
+
+## Automatisch abhaken mit op.gg (optional)
+Archipelago Launcher → **Custom Valorant AF op.gg Client** → verbinden → Riot-ID ins Eingabefeld tippen (z. B. `FireFlo#Fire`).
+Der Client schaut jede Minute auf op.gg und schickt **Win**, **Match MVP** und **Kill Bomb** automatisch – nur für **Unrated**-Spiele (mit YAML-Option `swiftplay_counts: true` auch **Swiftplay**) mit einem **freigeschalteten** Agenten. Ist das Ziel freigeschaltet, beendet der nächste Unrated-Sieg das Spiel.
+Spiele, die vor dem Verbinden gespielt wurden, zählen nicht. Waffen kann op.gg nicht prüfen – das bleibt Ehrensache.
+Befehle: `/unlocks`, `/opgg` (sofort prüfen), `/riot Name#TAG`.
+Der Manual Client kann parallel offen bleiben (Traps sehen, Checks notfalls per Hand).
