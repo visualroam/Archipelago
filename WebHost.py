@@ -105,12 +105,17 @@ if __name__ == "__main__":
     from WebHostLib.autolauncher import autohost, autogen, stop
     from WebHostLib.options import create as create_options_files
 
-    try:
-        from WebHostLib.lttpsprites import update_sprites_lttp
-        update_sprites_lttp()
-    except Exception as e:
-        logging.exception(e)
-        logging.warning("Could not update LttP sprites.")
+    # AF-Patch: ~500 A-Link-to-the-Past-Sprites nur laden, wenn ausdrücklich gewünscht. Sie landen außerhalb des
+    # Volumes (/app/data), würden also bei jedem Neustart neu geladen – und bei uns spielt niemand ALttP.
+    if os.environ.get("AF_LTTP_SPRITES", "").lower() in ("1", "true", "yes"):
+        try:
+            from WebHostLib.lttpsprites import update_sprites_lttp
+            update_sprites_lttp()
+        except Exception as e:
+            logging.exception(e)
+            logging.warning("Could not update LttP sprites.")
+    else:
+        logging.info("LttP-Sprites übersprungen (AF_LTTP_SPRITES=1 zum Laden).")
     app = get_app()
     from worlds import AutoWorldRegister, network_data_package
     # AF-Patch: Community-Worlds ohne `tutorials` (z. B. smo, minecraft_fabric) nicht verwerfen, sondern ohne Anleitung
